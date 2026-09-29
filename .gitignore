@@ -1,0 +1,76 @@
+# =============================================================================
+# DADOS SENSIVEIS -- NAO COMMITAR
+#
+# A chave de acesso da NFC-e e a porta de entrada para os dados do
+# consumidor. Quem tiver a chave consegue puxar a nota na SEFAZ, inclusive
+# CPF e historico de compras. Dado de terceiro, protected pela LGPD.
+#
+# O repositorio e PRIVADO e contem apenas fixtures anonimizados.
+# Para virar open source depois, nenhum trabalho extra e necessario:
+# ja esta limpo.
+# =============================================================================
+
+# Segredos e ambiente
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# Dados reais de compra -- NUNCA versionados
+*.nfce
+*.nfe
+*.xml
+cupons/
+notas/
+dados_reais/
+fixtures/reais/
+*.cpf
+*.chave
+private/
+raw/
+
+# Capturas de cupom (contem CPF, endereco, itens comprados)
+uploads/
+cupom*.jpg
+cupom*.png
+cupom*.jpeg
+cupom*.webp
+storage/
+media/
+
+# Banco local
+*.sqlite
+*.sqlite3
+*.db
+pgdata/
+dump*.sql
+backup*.sql
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# IDE / SO
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+logs/

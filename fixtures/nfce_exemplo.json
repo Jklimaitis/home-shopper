@@ -1,0 +1,150 @@
+{
+  "_aviso": "FIXTURE ANONIMO. Dados sinteticos para teste. Nao contem chave de acesso, CPF ou CNPJ reais. Estrutura e valores reproduzem a nota que motivou o schema, com identificadores substituidos por valores neutros.",
+  "chave_acesso": "00000000000000000000000000000000000000000000",
+  "versao_xml": "4.00",
+  "emitente": {
+    "nome": "SUPERMERCADO EXEMPLO LTDA",
+    "cnpj": "00000000000000",
+    "municipio": "Sao Paulo",
+    "uf": "SP"
+  },
+  "nota": {
+    "numero": "59952",
+    "serie": "13",
+    "emissao": "2026-07-10T11:46:35-03:00",
+    "valor_total": 337.0,
+    "itens_total": 14,
+    "forma_pagamento": "Cartao de Credito"
+  },
+  "consumidor": {
+    "cpf": "00000000000"
+  },
+  "itens": [
+    {
+      "linha": 1,
+      "descricao": "COXA DE FRANGO SWIFT 1 kg",
+      "codigo": "6169180",
+      "unidade": "pc",
+      "quantidade": "1",
+      "valor_unitario": "11.90",
+      "total": "11.90"
+    },
+    {
+      "linha": 2,
+      "descricao": "PALITINHO DE TAPIOCA NUU 300 g",
+      "codigo": "6222760",
+      "unidade": "pc",
+      "quantidade": "1",
+      "valor_unitario": "14.90",
+      "total": "14.90"
+    },
+    {
+      "linha": 3,
+      "descricao": "BIFE DO VAZIO IQF SWIFT 1kg",
+      "codigo": "6217690",
+      "unidade": "pc",
+      "quantidade": "1",
+      "valor_unitario": "45.90",
+      "total": "45.90"
+    },
+    {
+      "linha": 4,
+      "descricao": "MILHO MEIA ESPIGA SWIFT 1,02 kg",
+      "codigo": "6232250",
+      "unidade": "pc",
+      "quantidade": "1",
+      "valor_unitario": "18.90",
+      "total": "18.90"
+    },
+    {
+      "linha": 5,
+      "descricao": "CARNE MOIDA COMBO 1kg",
+      "codigo": "6220110",
+      "unidade": "pc",
+      "quantidade": "1",
+      "valor_unitario": "29.90",
+      "total": "29.90"
+    },
+    {
+      "linha": 6,
+      "descricao": "KANI KAMA SWIFT 250 g",
+      "codigo": "6187250",
+      "unidade": "pc",
+      "quantidade": "1",
+      "valor_unitario": "10.90",
+      "total": "10.90"
+    },
+    {
+      "linha": 7,
+      "descricao": "COSTELA DIANTEIRO CUBOS SWIFT 1 kg",
+      "codigo": "6213940",
+      "unidade": "pc",
+      "quantidade": "1",
+      "valor_unitario": "42.90",
+      "total": "42.90"
+    },
+    {
+      "linha": 8,
+      "descricao": "CUPIM COMBO kg",
+      "codigo": "6221920",
+      "unidade": "kg",
+      "quantidade": "1.446",
+      "valor_unitario": "39.90",
+      "total": "57.70"
+    },
+    {
+      "linha": 9,
+      "descricao": "MANDIOCA TOLETE SWIFT 1,02 kg",
+      "codigo": "6232010",
+      "unidade": "pc",
+      "quantidade": "1",
+      "valor_unitario": "13.90",
+      "total": "13.90"
+    },
+    {
+      "linha": 10,
+      "descricao": "FILE DE PEITO BDJ SEARA 1 kg",
+      "codigo": "6229530",
+      "unidade": "pc",
+      "quantidade": "1",
+      "valor_unitario": "18.90",
+      "total": "18.90"
+    },
+    {
+      "linha": 11,
+      "descricao": "FILE DE POLACA DO ALASKA SWIFT 500 g",
+      "codigo": "6224930",
+      "unidade": "pc",
+      "quantidade": "1",
+      "valor_unitario": "17.90",
+      "total": "17.90"
+    },
+    {
+      "linha": 12,
+      "descricao": "FILE DE PESCADA SWIFT 500 g",
+      "codigo": "6171010",
+      "unidade": "pc",
+      "quantidade": "1",
+      "valor_unitario": "24.90",
+      "total": "24.90"
+    },
+    {
+      "linha": 13,
+      "descricao": "MOELA FRANGO ALM SEARA 1 kg",
+      "codigo": "6169080",
+      "unidade": "pc",
+      "quantidade": "1",
+      "valor_unitario": "15.50",
+      "total": "15.50"
+    },
+    {
+      "linha": 14,
+      "descricao": "SOBRECOCHA DE FRANGO SWIFT 1 kg",
+      "codigo": "6169190",
+      "unidade": "pc",
+      "quantidade": "1",
+      "valor_unitario": "12.90",
+      "total": "12.90"
+    }
+  ]
+}
