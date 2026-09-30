@@ -55,9 +55,16 @@ jobs:
       - name: Domain tests
         env:
           PGPASSWORD: ci
+        # Two things matter here:
+        #  * no -q: it suppresses \echo and NOTICE, and the assertion count
+        #    below would drop from 21 to 9 on a perfectly good schema.
+        #  * 2>&1: psql sends NOTICE and error text to STDERR, so a plain
+        #    "psql ... | tee" captures the \echo lines but silently drops
+        #    every RESULT: PASS. The check below then counts 0 and fails a
+        #    correct schema.
         run: |
           psql -h localhost -U home_shopper -d home_shopper \
-               -v ON_ERROR_STOP=1 -f tests/smoke_test.sql | tee /tmp/smoke.log
+               -v ON_ERROR_STOP=1 -f tests/smoke_test.sql 2>&1 | tee /tmp/smoke.log
 
       - name: Fail on any failing assertion
         env:
