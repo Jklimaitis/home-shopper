@@ -51,8 +51,12 @@ CREATE INDEX idx_auditoria_user_em ON auditoria (user_id, em DESC);
 -- VIEWS
 -- -----------------------------------------------------------------------------
 
--- Preco de referencia mais recente por produto, com a melhor e a pior rede.
--- Esta e a view que o dashboard consome.
+-- Preco de referencia mais recente por PRODUTO E POR REDE.
+--
+-- O max() precisa ser por (produto_id, mercado_id). Filtrando so por
+-- produto, a view devolvia 1 linha por produto e as redes com preco
+-- nunca apareciam juntas -- isto e, a comparacao entre redes, que da
+-- nome ao projeto, nao existia em lugar nenhum.
 CREATE VIEW v_preco_atual AS
 SELECT
     pr.produto_id,
@@ -72,8 +76,35 @@ JOIN produto p        ON p.id = pr.produto_id
 JOIN supermercado m   ON m.id = pr.mercado_id
 LEFT JOIN categoria c ON c.id = p.categoria_id
 WHERE pr.data_ref = (
-    SELECT max(data_ref) FROM preco_ref WHERE produto_id = pr.produto_id
+    SELECT max(pr2.data_ref)
+      FROM preco_ref pr2
+     WHERE pr2.produto_id = pr.produto_id
+       AND pr2.mercado_id = pr.mercado_id
 );
+
+-- Melhor e pior preco por produto entre as redes que o usuario visitou.
+-- Derivado de v_preco_atual, entao herda o filtro por (produto, rede).
+-- Precisa existir separada: a view acima responde "quanto custa em cada
+-- rede", esta responde "onde comprar mais barato".
+CREATE VIEW v_melhor_preco AS
+SELECT
+    produto_id,
+    nome_canonico,
+    marca,
+    categoria,
+    unidade_base,
+    count(*) AS redes,
+    min(preco_base) AS melhor_preco,
+    max(preco_base) AS pior_preco,
+    round(
+        (max(preco_base) - min(preco_base))
+        / nullif(min(preco_base), 0) * 100, 2
+    ) AS dispersao_pct,
+    (array_agg(mercado_id ORDER BY preco_base))[1] AS melhor_mercado_id,
+    (array_agg(supermercado ORDER BY preco_base))[1] AS melhor_supermercado
+FROM v_preco_atual
+GROUP BY produto_id, nome_canonico, marca, categoria, unidade_base
+HAVING count(*) > 1;
 
 -- Comparativo de cesta equivalente: o MESMO produto canonico visto em mais
 -- de uma rede nos ultimos 30 dias. Sem preco_base, isto seria ruido.
@@ -130,7 +161,11 @@ SELECT
     count(si.id) AS total_itens
 FROM staging_nota sn
 LEFT JOIN supermercado m ON m.id = sn.mercado_id
-JOIN staging_item si ON si.nota_id = sn.id
+-- LEFT JOIN, nao JOIN: uma nota sem nenhum item (falha de ingestao, ou
+-- upload que o parser nao conseguiu abrir) precisa aparecer na fila. Com
+-- JOIN interno ela some -- e a nota que o usuario precisa para entender
+-- o que houve e a unica que o sistema esconderia dele.
+LEFT JOIN staging_item si ON si.nota_id = sn.id
 WHERE sn.status IN ('PENDENTE', 'EM_REVISAO')
 GROUP BY sn.id, sn.user_id, sn.origem, sn.status, sn.total_bruto,
          sn.desconto_total, sn.total_pago, sn.total_calculado,

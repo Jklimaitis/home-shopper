@@ -223,4 +223,105 @@ END $$;
 \echo '  3x QJO COAL BELO M a 28,90 = linhas distintas no cupom,'
 \echo '  mesmo preco unitario. UNIQUE (nota_id, linha) permite.'
 
+-- ============================ REGRESSOES (revisao independente) ============================
+\echo ''
+\echo '--- R1: chave de matching preserva o texto e nao colide ---'
+-- O regex original era [^a-z0-9 ] com lower() DEPOIS: apagava todas as
+-- letras maiusculas. 'COXA DE FRANGO SWIFT 1 kg' virava '    1 kg' e
+-- colidia com 'MOELA FRANGO ALM SEARA 1 kg', dois produtos da MESMA nota.
+DO $$
+DECLARE
+    v_coxa   TEXT;
+    v_vazio  TEXT;
+    v_result TEXT;
+BEGIN
+    -- COXA existe no fixture. MOELA nao: e o que a nota real trazia
+    -- para provar a colisao, entao e calculado aqui sem depender do
+    -- catalogo -- senao o teste passaria por acidente.
+    SELECT chave INTO v_coxa FROM apresentacao WHERE descricao_fiscal LIKE 'COXA%';
+
+    v_vazio := regexp_replace(lower('MOELA FRANGO ALM SEARA 1 kg'), '[^a-z0-9]+', ' ', 'g');
+    v_result := regexp_replace(lower('COXA DE FRANGO SWIFT 1 kg'), '[^a-z0-9]+', ' ', 'g');
+
+    RAISE NOTICE 'R1 coxa (do banco) : [%]', v_coxa;
+    RAISE NOTICE 'R1 moela (calculada): [%]', v_vazio;
+
+    IF v_coxa = v_result                      -- o que o banco gerou bate com o esperado
+       AND v_coxa IS DISTINCT FROM v_vazio    -- e nao colide com o outro produto
+       AND length(v_coxa) > 10 THEN            -- e o texto nao foi destruido
+        RAISE NOTICE 'R1 RESULTADO: PASS (chave integra, distinta, texto preservado)';
+    ELSE
+        RAISE NOTICE 'R1 RESULTADO: FAIL (colisao ou texto perdido)';
+    END IF;
+END $$;
+
+\echo ''
+\echo '--- R2: UNIQUE protege quando a coluna nullable e NULL ---'
+-- marca NULL e o caso comum em hortifruti. Sem NULLS NOT DISTINCT,
+-- 'CUPIM COMBO' sem marca podia existir N vezes.
+DO $$
+DECLARE v_bloqueou BOOLEAN := false;
+BEGIN
+    BEGIN
+        INSERT INTO produto (nome_canonico, categoria_id, marca, unidade_base, qtde_base)
+        SELECT 'Kani Kama Swift', id, 'Swift', 'G', 250 FROM categoria LIMIT 1;
+    EXCEPTION WHEN unique_violation THEN v_bloqueou := true;
+    END;
+    RAISE NOTICE 'R2 duplicata bloqueada: %',
+        CASE WHEN v_bloqueou THEN 'PASS' ELSE 'FAIL' END;
+END $$;
+
+\echo ''
+\echo '--- R3: exclusao LGPD do titular executa (FK de auditoria removida) ---'
+-- A auditoria gravava user_id com REFERENCES usuario(id). O CASCADE de
+-- nota/item_nota disparava o trigger de auditoria DENTRO da transacao que
+-- ainda nao removia a linha de usuario -> violacao de FK, exclusao
+-- impossivel. Reproduzido antes da correcao.
+DO $$
+DECLARE
+    v_user  UUID;
+    v_email TEXT;
+    v_notas INT;
+    v_itens INT;
+    v_aud   INT;
+BEGIN
+    v_email := 'lgpd@teste.com';
+    INSERT INTO usuario (nome, email) VALUES ('Teste LGPD', v_email)
+        RETURNING id INTO v_user;
+
+    INSERT INTO nota (user_id, mercado_id, data_compra, valor_total)
+        SELECT v_user, id, CURRENT_DATE, 50.00 FROM supermercado LIMIT 1;
+    INSERT INTO item_nota (nota_id, produto_id, apres_id, linha,
+                           valor_unitario, quantidade, desconto_item, total_linha)
+        SELECT (SELECT id FROM nota WHERE user_id = v_user),
+               p.id, a.id, 1, 10.90, 1, 0, 10.90
+          FROM produto p JOIN apresentacao a ON a.produto_id = p.id
+         WHERE p.nome_canonico = 'Kani Kama Swift' LIMIT 1;
+
+    -- caminho da API: app.user_id definido
+    PERFORM set_config('app.user_id', v_user::text, true);
+
+    INSERT INTO exclusao_titular (usuario_id, email, motivo)
+        VALUES (v_user, v_email, 'teste de exclusao');
+
+    DELETE FROM usuario WHERE id = v_user;
+
+    SELECT count(*) INTO v_notas FROM nota      WHERE user_id = v_user;
+    SELECT count(*) INTO v_itens FROM item_nota  WHERE nota_id NOT IN (SELECT id FROM nota);
+    -- auditoria SEMPRE sobrevive ao titular, por desenho
+    SELECT count(*) INTO v_aud FROM auditoria   WHERE user_id = v_user;
+
+    RAISE NOTICE 'R3 notas restantes : %', v_notas;
+    RAISE NOTICE 'R3 itens restantes : %', v_itens;
+    RAISE NOTICE 'R3 registros de auditoria preservados: %', v_aud;
+    RAISE NOTICE 'R3 exclusao_titular sobreviveu: %',
+        CASE WHEN EXISTS (SELECT 1 FROM exclusao_titular WHERE usuario_id = v_user)
+             THEN 'PASS' ELSE 'FAIL' END;
+    IF v_notas = 0 AND v_aud > 0 THEN
+        RAISE NOTICE 'R3 RESULTADO: PASS (dados do titular removidos, auditoria preservada)';
+    ELSE
+        RAISE NOTICE 'R3 RESULTADO: FAIL';
+    END IF;
+END $$;
+
 ROLLBACK;

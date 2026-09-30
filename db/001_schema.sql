@@ -81,7 +81,12 @@ CREATE TABLE produto (
     qtde_base     NUMERIC(14,6) NOT NULL DEFAULT 1 CHECK (qtde_base > 0),
     criado_em     TIMESTAMPTZ NOT NULL DEFAULT now(),
     atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT produto_unico UNIQUE (nome_canonico, marca)
+    -- NULLS NOT DISTINCT: sem isso, 'CUPIM COMBO' com marca NULL pode
+    -- existir N vezes (NULLs sao distintos em UNIQUE no Postgres). Como
+    -- produto e o PK logico de apresentacao/item_nota/preco_ref, cada
+    -- duplicata carrega um fator_base diferente e o dashboard passa a
+    -- comparar home_shopper que nao sao comparaveis.
+    CONSTRAINT produto_unico UNIQUE NULLS NOT DISTINCT (nome_canonico, marca)
 );
 
 -- -----------------------------------------------------------------------------
@@ -102,7 +107,9 @@ CREATE TABLE sinonimo (
     expande_para TEXT NOT NULL,
     escopo      TEXT,
     criado_em   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT sinonimo_unico UNIQUE (termo, escopo)
+    -- NULLS NOT DISTINCT: escopo NULL (global) e o caso mais comum, e
+    -- sem isso o constraint nunca protege.
+    CONSTRAINT sinonimo_unico UNIQUE NULLS NOT DISTINCT (termo, escopo)
 );
 
 -- -----------------------------------------------------------------------------
@@ -122,12 +129,33 @@ CREATE TABLE apresentacao (
     unidade_venda  TEXT NOT NULL,
     fator_base     NUMERIC(14,6) NOT NULL CHECK (fator_base > 0),
     descricao_fiscal TEXT NOT NULL,
+    -- Versao normalizada: minuscula, sem acento, sem pontuacao. E o que
+    -- a busca casa.
     descricao_norm TEXT NOT NULL,
+    -- Chave de matching.
+    --
+    -- A ORDEM das funcoes importa: lower() ANTES de regexp_replace.
+    -- Invertido, o regex [^a-z0-9 ] apaga toda letra MAIUSCULA (as
+    -- descricoes fiscais vem em caixa alta) e sobra so o numero:
+    --   'COXA DE FRANGO SWIFT 1 kg' -> '    1 kg'  (17 de 25 chars)
+    -- Na nota real, COXA DE FRANGO e MOELA FRANGO -- dois produtos
+    -- diferentes -- colidiam nessa mesma chave.
+    --
+    -- '[^a-z0-9]+' -> ' ' colapsa qualquer sequencia de nao-alfanumericos
+    -- num espaco unico, para que '1 kg', '1kg' e '1  kg' gerem a mesma chave.
     chave          TEXT GENERATED ALWAYS AS
-        (lower(regexp_replace(descricao_norm, '[^a-z0-9 ]', '', 'g'))) STORED,
+        (regexp_replace(lower(descricao_norm), '[^a-z0-9]+', ' ', 'g')) STORED,
     loja_id        UUID REFERENCES supermercado(id) ON DELETE CASCADE,
     criado_em      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT apres_unico UNIQUE (produto_id, chave, loja_id)
+    -- NULLS NOT DISTINCT: loja_id NULL significa 'global', que e o caso
+    -- mais frequente, e justamente onde o constraint sem esta opcao
+    -- deixa de valer.
+    CONSTRAINT apres_unico UNIQUE NULLS NOT DISTINCT (produto_id, chave, loja_id),
+    -- Alvo da FK composta de staging_item e item_nota: garante no BANCO
+    -- que a apresentacao pertence ao produto informado. Sem isto, a
+    -- coerencia dependeria so do trigger, e o staging -- que e onde o
+    -- matcher erra -- aceitaria o par inconsistente.
+    CONSTRAINT apres_id_produto UNIQUE (id, produto_id)
 );
 
 COMMIT;

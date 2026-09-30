@@ -51,7 +51,7 @@ CREATE TABLE staging_item (
     quantidade      NUMERIC(12,3) NOT NULL CHECK (quantidade >= 0),
     valor_unitario  NUMERIC(12,4) NOT NULL CHECK (valor_unitario >= 0),
     desconto_item   NUMERIC(12,2) NOT NULL DEFAULT 0,
-    total_linha     NUMERIC(12,2) NOT NULL,
+    total_linha     NUMERIC(12,2) NOT NULL CHECK (total_linha >= 0),
     produto_id      UUID REFERENCES produto(id) ON DELETE SET NULL,
     apres_id        UUID REFERENCES apresentacao(id) ON DELETE SET NULL,
     fonte           fonte_match NOT NULL DEFAULT 'NENHUM',
@@ -59,7 +59,9 @@ CREATE TABLE staging_item (
     conferido       BOOLEAN NOT NULL DEFAULT FALSE,
     descartado      BOOLEAN NOT NULL DEFAULT FALSE,
     criado_em       TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT stg_item_unico UNIQUE (nota_id, linha)
+    CONSTRAINT stg_item_unico UNIQUE (nota_id, linha),
+    FOREIGN KEY (apres_id, produto_id)
+        REFERENCES apresentacao(id, produto_id) ON DELETE SET NULL
 );
 
 -- -----------------------------------------------------------------------------
@@ -92,11 +94,17 @@ CREATE TABLE item_nota (
     valor_unitario NUMERIC(12,4) NOT NULL CHECK (valor_unitario >= 0),
     quantidade     NUMERIC(12,3) NOT NULL CHECK (quantidade > 0),
     desconto_item  NUMERIC(12,2) NOT NULL DEFAULT 0,
-    total_linha    NUMERIC(12,2) NOT NULL,
+    total_linha    NUMERIC(12,2) NOT NULL CHECK (total_linha >= 0),
     preco_base     NUMERIC(14,8) NOT NULL CHECK (preco_base >= 0),
     unidade_base   unidade_base NOT NULL,
     criado_em      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT item_unico UNIQUE (nota_id, linha)
+    CONSTRAINT item_unico UNIQUE (nota_id, linha),
+    -- Impede gravar uma apresentacao que pertence a OUTRO produto.
+    -- O trigger calc_preco_base tambem rejeita, mas por efeito colateral:
+    -- a coerencia vira propriedade do banco, nao do codigo.
+    CONSTRAINT item_apres_produto_fk
+        FOREIGN KEY (apres_id, produto_id)
+        REFERENCES apresentacao(id, produto_id) ON DELETE RESTRICT
 );
 
 -- -----------------------------------------------------------------------------
@@ -145,9 +153,20 @@ CREATE TABLE exclusao_titular (
     motivo        TEXT
 );
 
+-- user_id SEM FK, de proposito.
+--
+-- Se auditoria.user_id referenciasse usuario(id), o DELETE do titular
+-- abortaria: o CASCADE de nota/item_nota dispara o trigger de auditoria
+-- DENTRO da mesma transacao que ainda nao removeu a linha de usuario.
+-- Reproduzido: 'insert or update on table "auditoria" violates foreign
+-- key constraint'. A exclusao LGPD ficaria inexecutavel.
+--
+-- user_id aqui e METADADO DO ATOR, nao dado de negocio. E o mesmo
+-- argumento que ja vale para exclusao_titular: o registro de que algo
+-- aconteceu precisa sobreviver a quem o fez.
 CREATE TABLE auditoria (
     id           BIGSERIAL PRIMARY KEY,
-    user_id      UUID REFERENCES usuario(id) ON DELETE SET NULL,
+    user_id      UUID,
     tabela       TEXT NOT NULL,
     operacao     TEXT NOT NULL CHECK (operacao IN ('INSERT', 'UPDATE', 'DELETE')),
     registro_id  UUID,
@@ -196,9 +215,13 @@ BEGIN
     -- Em DELETE, NEW e nulo: usa OLD.
     v_nota := coalesce(NEW.nota_id, OLD.nota_id);
 
+    -- Filtra descartado: um item descartado (erro de OCR, linha invalida)
+    -- nao pode continuar compondo a soma, ou a divergencia real fica
+    -- invisivel enquanto a view o conta como resolvido.
     SELECT coalesce(sum(total_linha), 0) INTO v_soma
       FROM staging_item
-     WHERE nota_id = v_nota;
+     WHERE nota_id = v_nota
+       AND NOT descartado;
 
     UPDATE staging_nota
        SET total_calculado  = round(v_soma, 2),
