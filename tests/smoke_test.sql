@@ -46,10 +46,11 @@ INSERT INTO apresentacao (produto_id, unidade_venda, fator_base, descricao_fisca
       FROM produto WHERE nome_canonico='Carne Moida Combo';
 
 -- Staging: a nota real
-INSERT INTO staging_nota (user_id, origem, origem_ref, mercado_id, total_declarado)
+INSERT INTO staging_nota (user_id, origem, origem_ref, mercado_id, total_bruto,
+                          desconto_total, total_pago)
     VALUES ((SELECT id FROM usuario), 'SEFAZ',
             '00000000000000000000000000000000000000000000',
-            (SELECT id FROM supermercado), 337.00);
+            (SELECT id FROM supermercado), 337.00, 0.00, 337.00);
 
 INSERT INTO staging_item (nota_id, linha, descricao_bruta, codigo_loja, unidade_obs,
     quantidade, valor_unitario, desconto_item, total_linha, produto_id, apres_id, fonte) VALUES
@@ -72,7 +73,9 @@ INSERT INTO staging_item (nota_id, linha, descricao_bruta, codigo_loja, unidade_
 \echo ''
 \echo '--- A1: checksum contabil (nota real) ---'
 SELECT 'A1' AS teste,
-       total_declarado,
+       total_bruto,
+       desconto_total,
+       total_pago,
        total_calculado,
        divergencia_cents,
        CASE WHEN abs(divergencia_cents) <= 1 THEN 'PASS' ELSE 'FAIL' END AS r
@@ -87,7 +90,7 @@ FROM staging_nota;
 \echo '--- A3: consolidacao com apresentacao ---'
 INSERT INTO nota (user_id, mercado_id, staging_id, chave_acesso, data_compra, valor_total, pagamento)
     SELECT user_id, mercado_id, id, '00000000000000000000000000000000000000000000',
-           DATE '2026-07-10', total_declarado, 'Cartao de Credito'
+           DATE '2026-07-10', total_pago, 'Cartao de Credito'
     FROM staging_nota;
 
 INSERT INTO item_nota (nota_id, produto_id, apres_id, linha, valor_unitario, quantidade,
@@ -184,5 +187,40 @@ SELECT 'A10' AS teste,
        (SELECT count(*) FROM v_gasto_mensal)  AS v_gasto_mensal,
        (SELECT count(*) FROM v_pendencias)    AS v_pendencias,
        CASE WHEN (SELECT count(*) FROM v_gasto_mensal) = 1 THEN 'PASS' ELSE 'FAIL' END AS r;
+
+\echo ''
+\echo '--- A11: DESCONTO no total (nota 2 real: 550,93 - 6,00 = 544,93) ---'
+\echo '  A soma das linhas e o BRUTO. O desconto vive no TOTAIS.'
+\echo '  Se o checksum comparasse com o valor a pagar, acusaria -600 cents.'
+DO $$
+DECLARE
+    v_bruto NUMERIC := 550.93;
+    v_desc  NUMERIC := 6.00;
+    v_pago  NUMERIC := 544.93;
+    v_soma  NUMERIC;
+    v_div   INTEGER;
+BEGIN
+    -- Soma das 13 linhas da nota real (todos os total_linha declarados)
+    SELECT 46.84+43.97+95.71+46.31+28.90+28.90+28.90+49.90+49.90
+           +34.90+39.90+32.90+23.90 INTO v_soma;
+    v_div := round((v_bruto - v_soma) * 100)::INTEGER;
+
+    RAISE NOTICE 'A11 soma linhas   : %', v_soma;
+    RAISE NOTICE 'A11 total bruto  : % (cupom: Valor total)', v_bruto;
+    RAISE NOTICE 'A11 desconto     : %', v_desc;
+    RAISE NOTICE 'A11 valor a pagar: % (cupom: Valor a pagar)', v_pago;
+    RAISE NOTICE 'A11 divergencia  : % cents  <- 0 = CORRETO', v_div;
+
+    IF v_soma = v_bruto AND v_bruto - v_desc = v_pago AND v_div = 0 THEN
+        RAISE NOTICE 'A11 RESULTADO    : PASS';
+    ELSE
+        RAISE NOTICE 'A11 RESULTADO    : FAIL';
+    END IF;
+END $$;
+
+\echo ''
+\echo '--- A12: item repetido na mesma nota ---'
+\echo '  3x QJO COAL BELO M a 28,90 = linhas distintas no cupom,'
+\echo '  mesmo preco unitario. UNIQUE (nota_id, linha) permite.'
 
 ROLLBACK;

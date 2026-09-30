@@ -21,8 +21,19 @@ CREATE TABLE staging_nota (
     mercado_id     UUID REFERENCES supermercado(id) ON DELETE SET NULL,
     status         status_consol NOT NULL DEFAULT 'PENDENTE',
     filepath_cupom TEXT,
-    total_declarado NUMERIC(12,2),
-    total_calculado NUMERIC(12,2),
+    -- O cupom mostra TRES valores, e eles nao sao a mesma coisa:
+    --   "Valor total 550,93 | Desconto 6,00 | Valor a pagar 544,93"
+    -- A soma das 13 linhas de uma nota real (SEARA, 06/12/2025) da
+    -- 550,93 -- ou seja, o BRUTO. O desconto de 6,00 vive no TOTAIS,
+    -- nao nas linhas.
+    --
+    -- Por isso o checksum compara contra total_bruto e nao contra o
+    -- valor a pagar: comparar com o liquido acusa divergencia de 600
+    -- centavos em toda nota com desconto (falso positivo garantido).
+    total_bruto     NUMERIC(12,2),   -- cupom: "Valor total"
+    desconto_total  NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (desconto_total >= 0),
+    total_pago      NUMERIC(12,2),   -- cupom: "Valor a pagar"
+    total_calculado NUMERIC(12,2),   -- soma das linhas, calculada pelo trigger
     divergencia_cents INTEGER,
     erro_ingestao  TEXT,
     tentativas     INTEGER NOT NULL DEFAULT 0,
@@ -192,8 +203,8 @@ BEGIN
     UPDATE staging_nota
        SET total_calculado  = round(v_soma, 2),
            divergencia_cents = CASE
-               WHEN total_declarado IS NULL THEN NULL
-               ELSE round((total_declarado - v_soma) * 100)::INTEGER
+               WHEN total_bruto IS NULL THEN NULL
+               ELSE round((total_bruto - v_soma) * 100)::INTEGER
            END,
            atualizado_em = now()
      WHERE id = v_nota;

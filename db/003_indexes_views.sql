@@ -117,7 +117,9 @@ SELECT
     sn.user_id,
     sn.origem,
     sn.status,
-    sn.total_declarado,
+    sn.total_bruto,
+    sn.desconto_total,
+    sn.total_pago,
     sn.total_calculado,
     sn.divergencia_cents,
     m.nome AS supermercado,
@@ -130,8 +132,9 @@ FROM staging_nota sn
 LEFT JOIN supermercado m ON m.id = sn.mercado_id
 JOIN staging_item si ON si.nota_id = sn.id
 WHERE sn.status IN ('PENDENTE', 'EM_REVISAO')
-GROUP BY sn.id, sn.user_id, sn.origem, sn.status, sn.total_declarado,
-         sn.total_calculado, sn.divergencia_cents, m.nome
+GROUP BY sn.id, sn.user_id, sn.origem, sn.status, sn.total_bruto,
+         sn.desconto_total, sn.total_pago, sn.total_calculado,
+         sn.divergencia_cents, m.nome
 ORDER BY abs(sn.divergencia_cents) DESC NULLS LAST,
          count(si.id) FILTER (WHERE si.produto_id IS NULL) DESC;
 
