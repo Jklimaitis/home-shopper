@@ -1,210 +1,252 @@
-# ERD — Monitor de Preços de Supermercados
+# ERD — home_shopper
 
-Diagrama gerado a partir do schema aplicado em PostgreSQL 16.
-13 tabelas, 4 views, 24 índices, 9 triggers.
+Generated from the schema applied on PostgreSQL 16: **14 tables, 5 views,
+48 indexes, 14 triggers, 4 enums**. Every constraint is named
+(`pk_`, `fk_`, `uk_`, `ck_`).
 
 ```mermaid
 erDiagram
-    %% ---------- CADASTROS ----------
-    usuario {
-        uuid    id PK
-        text    nome
-        text    email UK
-        timestamptz criado_em
-        timestamptz atualizado_em
+    %% ---------- STRONG ENTITIES ----------
+    users {
+        uuid      id PK
+        text      name
+        text      email UK
+        timestamptz created_at
+        timestamptz updated_at
     }
 
-    supermercado {
-        uuid    id PK
-        text    nome
-        char14  cnpj UK
-        text    regiao
-        timestamptz criado_em
+    stores {
+        uuid      id PK
+        text      name
+        char14    cnpj UK
+        char7     ibge_code "IBGE municipality"
+        text      trade_name
+        timestamptz created_at
     }
 
-    categoria {
-        uuid    id PK
-        text    nome UK
-        uuid    parent_id FK "self-ref: subcategoria"
+    categories {
+        uuid      id PK
+        text      name UK
+        uuid      parent_id FK "self-ref: subcategory"
     }
 
-    produto {
-        uuid    id PK
-        text    nome_canonico
-        uuid    categoria_id FK
-        text    ean UK "nullable: hortifruti nao tem"
-        enum    unidade_base "ML, G, UN..."
-        text    marca
+    %% ---------- CATALOGUE ----------
+    products {
+        uuid      id PK
+        text      name
+        uuid      category_id FK
+        text      brand "nullable: fresh produce"
+        text      ean UK "partial index, 0 of 42 real items"
+        enum      base_unit "UN, G, ML -- smallest unit only"
+        timestamptz created_at
+        timestamptz updated_at
     }
 
-    apresentacao {
-        uuid    id PK
-        uuid    produto_id FK
-        text    unidade_venda "UN, CX, KG"
-        numeric fator_para_base "quantas unidades_base em 1 unidade_venda"
-        text    descricao_fiscal "como veio no cupom"
-        text    descricao_norm
-        text    chave_match "generated"
-        uuid    loja_id FK "null = global"
+    synonyms {
+        uuid      id PK
+        text      term
+        text      expands_to
+        text      scope "nullable = global"
+        timestamptz created_at
     }
 
-    %% ---------- INGESTAO (staging) ----------
-    staging_nota {
-        uuid    id PK
-        uuid    user_id FK
-        enum    origem "MANUAL, QRCODE, SEFAZ, OCR"
-        text    origem_ref "chave 44 digitos"
-        text    origem_ref_norm "generated"
-        uuid    supermercado_id FK
-        enum    status "PENDENTE, EM_REVISAO, CONCLUIDO"
-        text    filepath_cupom "so caminho, nunca BLOB"
-        numeric valor_total_declarado "total do cupom"
-        numeric valor_total_calculado "soma calculada"
-        integer divergencia_centavos "checksum"
-        text    erro_ingestao
-        integer tentativas
+    presentations {
+        uuid      id PK
+        uuid      product_id FK
+        text      sale_unit "UN, CX, KG, PC as printed"
+        numeric   factor_base "base units per sale_unit"
+        text      description_raw "as printed on the receipt"
+        text      description_norm "lowercased"
+        text      match_key "generated"
+        uuid      store_id FK "null = global wording"
+        timestamptz created_at
     }
 
-    staging_item {
-        uuid    id PK
-        uuid    staging_nota_id FK
-        smallint linha "ordem na nota"
-        text    descricao_bruta
-        text    codigo_barras
-        text    unidade_observada
-        numeric quantidade
-        numeric valor_unitario
-        numeric desconto_item
-        numeric total_linha
-        uuid    produto_id FK "null = nao casou"
-        uuid    apresentacao_id FK
-        enum    fonte_match "EAN_EXATO, DESCRICAO, MANUAL, NENHUM"
-        text    mensagem_match "bitacora do learning loop"
-        boolean conferido
-        boolean descartado
+    %% ---------- STAGING ----------
+    staging_receipts {
+        uuid      id PK
+        uuid      user_id FK
+        enum      source "MANUAL, QRCODE, SEFAZ, OCR, IMPORT"
+        text      source_ref "access key, SEFAZ url"
+        text      source_ref_norm "generated"
+        uuid      store_id FK
+        enum      status "PENDING, IN_REVIEW, DONE, DISCARDED"
+        text      file_path "path only, never a BLOB"
+        numeric   total_gross "receipt: Total"
+        numeric   discount_total "receipt: Discount"
+        numeric   amount_paid "receipt: Amount paid"
+        numeric   total_computed "sum of lines, by trigger"
+        integer   divergence_cents "checksum"
+        text      error_message
+        integer   attempts
+        timestamptz created_at
+        timestamptz updated_at
     }
 
-    %% ---------- TRANSACOES ----------
-    nota {
-        uuid    id PK
-        uuid    user_id FK
-        uuid    supermercado_id FK
-        uuid    staging_nota_id FK
-        char44  chave_acesso UK "idempotencia"
-        date    data_compra
-        numeric valor_total
-        text    forma_pagamento
+    staging_lines {
+        uuid      id PK
+        uuid      receipt_id FK
+        smallint  line_no
+        text      description_raw
+        text      store_code "emitter's 7-digit code, search aid only"
+        text      sale_unit
+        numeric   quantity
+        numeric   unit_price
+        numeric   discount_line
+        numeric   line_total
+        uuid      product_id FK "null = unmatched"
+        uuid      presentation_id FK
+        enum      match_source "BARCODE, DESCRIPTION, ALIAS, MANUAL, NONE"
+        text      match_note "learning loop trail"
+        boolean   reviewed
+        boolean   discarded
+        timestamptz created_at
     }
 
-    item_nota {
-        uuid    id PK
-        uuid    nota_id FK
-        uuid    produto_id FK
-        uuid    apresentacao_id FK
-        smallint linha
-        numeric valor_unitario
-        numeric quantidade
-        numeric desconto_item
-        numeric total_linha
-        numeric preco_canonico "por unidade_base"
-        enum    unidade_base "derivado"
+    %% ---------- TRUSTED LAYER ----------
+    purchase_notes {
+        uuid      id PK
+        uuid      user_id FK
+        uuid      store_id FK
+        uuid      staging_receipt_id FK
+        char44    access_key "partial unique: idempotency"
+        date      purchase_date
+        numeric   amount_paid
+        text      payment_method
+        timestamptz created_at
     }
 
-    %% ---------- ANALISE ----------
-    preco_referencia {
-        uuid    id PK
-        uuid    produto_id FK
-        uuid    supermercado_id FK
-        date    data_ref
-        numeric preco_canonico
-        numeric preco_min_30d
-        numeric preco_max_30d
-        numeric variacao_pct_30d
+    line_items {
+        uuid      id PK
+        uuid      note_id FK
+        uuid      product_id FK
+        uuid      presentation_id FK
+        smallint  line_no
+        numeric   unit_price
+        numeric   quantity
+        numeric   discount_line
+        numeric   line_total
+        numeric   base_price "per base_unit, by trigger"
+        enum      base_unit "derived by trigger"
+        timestamptz created_at
     }
 
-    alerta_preco {
-        uuid    id PK
-        uuid    user_id FK
-        uuid    produto_id FK
-        uuid    preco_ref_id FK
-        text    tipo "QUEDA, ALTA, MELHOR_PRECO"
-        numeric variacao_pct
-        text    mensagem
-        boolean lido
-        timestamptz gerado_em
+    %% ---------- ANALYTICS ----------
+    price_refs {
+        uuid      id PK
+        uuid      user_id FK
+        uuid      product_id FK
+        uuid      store_id FK
+        date      ref_date
+        numeric   base_price
+        enum      base_unit
+        numeric   min_30d
+        numeric   max_30d
+        numeric   var_pct_30d
+        timestamptz updated_at
     }
 
-    %% ---------- LGPD E AUDITORIA ----------
-    exclusao_titular {
-        uuid    id PK
-        uuid    usuario_id "sem FK: sobrevive ao DELETE"
-        text    email
-        integer notas_removidas
-        integer itens_removidos
-        timestamptz solicitado_em
-        timestamptz executado_em
-        text    motivo
+    price_alerts {
+        uuid      id PK
+        uuid      user_id FK
+        uuid      product_id FK
+        uuid      price_ref_id FK "ON DELETE SET NULL"
+        text      alert_type "PRICE_DROP, PRICE_RISE, BEST_PRICE"
+        numeric   var_pct
+        text      message
+        boolean   read
+        timestamptz created_at
     }
 
-    auditoria {
+    %% ---------- LGPD / AUDIT ----------
+    data_erasure_requests {
+        uuid      id PK
+        uuid      user_id "no FK: must outlive the DELETE"
+        text      email
+        integer   notes_removed
+        integer   items_removed
+        timestamptz requested_at
+        timestamptz executed_at
+        text      reason
+    }
+
+    audit_log {
         bigserial id PK
-        uuid    user_id FK
-        text    tabela
-        text    operacao "INSERT, UPDATE, DELETE"
-        uuid    registro_id
-        jsonb   dados_antes
-        jsonb   dados_depois
-        timestamptz em
+        uuid      user_id "no FK: actor metadata"
+        text      table_name
+        text      operation
+        uuid      record_id
+        jsonb     before_data
+        jsonb     after_data
+        timestamptz occurred_at
     }
 
-    %% ---------- RELACIONAMENTOS ----------
-    usuario ||--o{ nota : "compra"
-    usuario ||--o{ staging_nota : "envia cupom"
-    usuario ||--o{ alerta_preco : "recebe"
-    usuario ||--o{ auditoria : "executa"
+    %% ---------- RELATIONSHIPS ----------
+    users ||--o{ purchase_notes : "makes"
+    users ||--o{ staging_receipts : "submits"
+    users ||--o{ price_refs : "observes"
+    users ||--o{ price_alerts : "receives"
+    users ||--o{ audit_log : "acts"
+    users ||--o{ data_erasure_requests : "requests erasure"
 
-    supermercado ||--o{ nota : "emite"
-    supermercado ||--o{ staging_nota : "identifica"
-    supermercado ||--o{ apresentacao : "nomenclatura propria"
-    supermercado ||--o{ preco_referencia : "preco praticado"
+    stores ||--o{ purchase_notes : "issues"
+    stores ||--o{ staging_receipts : "identified in"
+    stores ||--o{ presentations : "has own wording for"
+    stores ||--o{ price_refs : "price observed at"
 
-    categoria ||--o{ categoria : "contem"
-    categoria ||--o{ produto : "classifica"
+    categories ||--o{ categories : "contains"
+    categories ||--o{ products : "classifies"
 
-    produto ||--o{ apresentacao : "vendido como"
-    produto ||--o{ item_nota : "comprado"
-    produto ||--o{ staging_item : "casado em"
-    produto ||--o{ preco_referencia : "monitorado"
-    produto ||--o{ alerta_preco : "alerta de"
+    products ||--o{ presentations : "sold as"
+    products ||--o{ line_items : "bought"
+    products ||--o{ staging_lines : "matched in"
+    products ||--o{ price_refs : "monitored"
+    products ||--o{ price_alerts : "alerts about"
 
-    apresentacao ||--o{ item_nota : "unidade cobrada"
-    apresentacao ||--o{ staging_item : "unidade observada"
+    presentations ||--o{ line_items : "unit charged"
+    presentations ||--o{ staging_lines : "unit observed"
 
-    staging_nota ||--o{ staging_item : "linhas brutas"
-    staging_nota |o--o| nota : "vira nota revisada"
+    staging_receipts ||--o{ staging_lines : "raw lines"
+    staging_receipts |o--o| purchase_notes : "becomes a reviewed note"
 
-    nota ||--|{ item_nota : "contem"
-    nota }o--|| preco_referencia : "alimenta"
-    preco_referencia ||--o{ alerta_preco : "dispara"
+    purchase_notes ||--|{ line_items : "contains"
+    purchase_notes }o--|| price_refs : "feeds"
+    price_refs ||--o{ price_alerts : "triggers"
 ```
 
-## As três decisões que o diagrama revela
+## The three decisions the diagram makes visible
 
-**1. `apresentacao` funde de-para com conversão de unidade.**
-A descrição truncada do cupom (`LEITE UHT HERC CX 12UN`) já carrega quantas unidades base tem aquela caixa. Separar "de-para" de "fator de conversão" em duas tabelas duplicaria o dado e permitiria que divergissem. Aqui ficam juntos por construção, e `loja_id` nulo = global resolve o caso de cada rede nomear o produto de um jeito.
+**1. `presentations` fuses the lookup table with the unit conversion.**
+The truncated receipt description (`LEITE UHT HERC CX 12UN`) already carries how
+many base units the pack holds. Splitting "alias" from "conversion factor"
+into two tables would duplicate the data and let the two drift apart.
 
-**2. O `preco_canonico` é derivado, não digitado.**
-O trigger `trg_item_nota_canonico` divide `valor_unitario` por `fator_para_base` e **recusa** gravar a linha se a apresentação não estiver resolvida. É o que impede a comparação entre redes de ser ruído — a caixa de 12 unidades e a unidade solta viram o mesmo número.
+**There is no store-internal product code.** The 7-digit code on the receipt
+belongs to the *emitter*: the same cut of beef carries a different code at
+every CNPJ, and this project exists to compare **between** stores. A matching
+key that changes between the stores you want to compare is not a key — it is
+confident noise. The code lives in `staging_lines`, where it speeds up
+capture, and is never propagated.
 
-**3. O staging tem ciclo de vida próprio.**
-`staging_nota` → `staging_item` → [revisão humana] → `nota` → `item_nota`. Nada entra na tabela de análise sem passar pela conferência, e a `staging_nota` original é preservada (`ON DELETE SET NULL` em `nota.staging_nota_id`) para auditoria.
+**2. `base_price` is derived, never typed.**
+The trigger `tr_line_items_base_price` computes `unit_price / factor_base` and
+**refuses** the row when the presentation is unresolved. That is what stops a
+250 g pack and a 1 kg pack from being compared as if they were the same thing.
 
-## Pontos de atenção para quando você implementar
+**3. Staging has its own lifecycle.**
+`staging_receipts` → `staging_lines` → *[human review]* → `purchase_notes` →
+`line_items`. Nothing reaches the trusted layer without review, and the
+original staging receipt is preserved (`ON DELETE SET NULL`).
 
-| Ponto | Por quê |
+## Things to watch when implementing
+
+| Point | Why |
 |---|---|
-| `item_nota.apresentacao_id` é `NOT NULL` | Sem ela não existe base de conversão. O trigger levanta exceção em vez de gravar preço errado. |
-| `chave_acesso` com índice único parcial | Uma NFC-e por usuário. Reprocessar a mesma nota não duplica. |
-| `uq_produto_ean` é parcial (`WHERE ean IS NOT NULL`) | Permite vários produtos sem EAN — o caso do hortifruti a granel. |
-| `exclusao_titular.usuario_id` **sem** FK | Intencional: o registro precisa sobreviver ao `DELETE` do titular. |
-| `user_id` em `staging_nota`, `nota`, `alerta_preco` | Isolamento multi-tenant. Toda query da API filtra por ele. |
+| `line_items.presentation_id` is `NOT NULL` | Without it there is no conversion basis; the trigger raises rather than storing an uncomparable price. |
+| `access_key` has a partial unique index | One NFC-e per user. Reprocessing a receipt — job retry, re-import — does not duplicate. |
+| `uk_products_ean` is partial (`WHERE ean IS NOT NULL`) | Allows many products without an EAN, the common case for fresh produce. |
+| `uk_products_name_brand` uses `NULLS NOT DISTINCT` | `brand IS NULL` is the normal case; without this, "CUPIM COMBO" could exist N times. |
+| `data_erasure_requests.user_id` has **no** FK | Intentionally: the record must survive the `DELETE` it documents. |
+| `audit_log.user_id` has **no** FK | Same reason. With an FK, erasing a user aborts — reproduced before the fix. |
+| `user_id` on `staging_receipts`, `purchase_notes`, `price_refs`, `price_alerts` | Tenant isolation. Every query filters on it. |
+| `price_alerts.price_ref_id` is `ON DELETE SET NULL` | An alert records that a message was delivered. Recomputing prices must not erase that. |

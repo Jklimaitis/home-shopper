@@ -1,65 +1,88 @@
 # home_shopper
 
-Monitor de preços de supermercados: catálogo canônico, comparação de preços
-entre redes e dashboard analítico.
+Supermarket price monitor: canonical catalogue, cross-store price comparison,
+and an analytics dashboard.
 
-> **Status:** fase de modelagem de dados. O schema e os testes de domínio estão
-> prontos e verificados; a API ainda não existe.
-
----
-
-## O problema
-
-Comparar o preço do mesmo produto entre redes é enganoso por três motivos, e
-este projeto resolve os três:
-
-**1. O mesmo produto tem nomes diferentes em cada mercado.**
-`LEITE UHT HERCULES 1000ML` e `LT INT HERC 1L` são o mesmo leite. Normalizar
-texto não resolve: `HERC` nunca vira `HERCULES` por regra de texto.
-Equivalência é **fato aprendido**, e fato aprendido mora em tabela
-(`sinonimo`, `apresentacao`), não em código.
-
-**2. O mesmo produto é vendido em unidades diferentes.**
-R$ 5,49 por `UN` e R$ 59,88 por `CX` de 12 não são 10× diferentes — são o
-mesmo preço. Todo preço é reexpresso na **unidade base** do produto
-(`preco_base`) antes de qualquer comparação.
-
-**3. Produto fresco não tem código de barras.**
-Em uma nota real analisada, **0 de 14 itens tinham EAN** — o código impresso
-é interno da rede. A identidade real é `marca + nome normalizado + tamanho`.
+> **Status:** data modelling phase. The schema and the domain tests are done
+> and verified; the API does not exist yet.
 
 ---
 
-## Estado atual
+## The problem
+
+Comparing the price of the same product across stores fails for three
+reasons, and this project solves all three.
+
+**1. The same product has a different name in every store.**
+`CARNE MOIDA COMBO 1kg` (receipt A, R$ 29,90) and `MOIDA COMBO 1KG` (note 3,
+R$ 27,90) are the same cut of beef. Normalising text cannot bridge that — no
+string rule turns one into the other. Equivalence is a **learned fact**, and a
+learned fact lives in a table (`synonyms`), not in code.
+
+**2. The same product is sold in different units.**
+R$ 5,49 per `UN` and R$ 59,88 per `CX` of 12 are not 10× apart — they are the
+same price. Every price is re-expressed in the product's **base unit**
+(`base_price`) before any comparison happens.
+
+**3. Fresh food has no barcode.**
+Across 42 line items in three receipts, **zero** had an EAN. The 7-digit
+code printed on the receipt belongs to the *emitter* and changes between
+CNPJs, so it is not an identity either. Real identity is
+`brand + normalised name + size`.
+
+---
+
+## Current state
 
 ```
-14 tabelas · 4 views · 48 índices · 14 triggers · 4 enums
+14 tables · 5 views · 48 indexes · 14 triggers · 4 enums
 ```
 
-Tudo criado em PostgreSQL 16 e verificado por um smoke test que usa uma NFC-e
-real (anonimizada) como fixture.
+Built on PostgreSQL 16 and verified by domain tests that use a NFC-e
+receipt (anonymised) as the fixture.
 
-| Verificação | Resultado |
+| Assertion | Result |
 |---|---|
-| Checksum contábil da nota | `337,00 = 337,00`, divergência 0 |
-| Preço canônico (250 g vs 1 kg) | Kani `0,043600/g` · Cupim `0,039900/g` |
-| Trigger recusa item sem apresentação | PASS |
-| Idempotência por chave de acesso | PASS |
-| `NUMERIC` vs `float` | float erra `5,5e-17` · NUMERIC erra `0` |
-| Fila de revisão humana | 8 de 14 itens sem match |
-| Views | 4 respondem |
+| Accounting checksum | `337,00 = 337,00`, divergence 0 |
+| Discount lives in the totals | 550,93 − 6,00 = 544,93, divergence 0 |
+| Base price (250 g vs 1 kg) | Surimi `0,043600/g` · Tripe `0,039900/g` |
+| Trigger refuses a line with no presentation | PASS |
+| Idempotency on the access key | PASS |
+| `NUMERIC` vs `float` | float errs by `5,5e-17` · NUMERIC errs by 0 |
+| LGPD erasure | data removed, audit trail preserved |
+| Every constraint is named | PASS |
 
 ---
 
-## Rodar
+## Conventions
+
+Taken from the author's study notes, applied consistently:
+
+- `snake_case`, lowercase, **English** identifiers
+- Tables in the **plural** (Django / Rails / Laravel convention)
+- **Every constraint named**:
+  - `pk_<table>` — primary key
+  - `fk_<child>_<parent>` — foreign key
+  - `uk_<table>_<columns>` — uniqueness
+  - `ck_<table>_<rule>` — check
+
+A named constraint is what makes an error message actionable. Postgres would
+otherwise emit `line_items_total_check`, which says nothing about which
+business rule was violated. The CI fails the build if any constraint lacks the
+prefix.
+
+---
+
+## Run it
 
 ```bash
-docker compose up -d          # Postgres 16
-psql -h localhost -U home_shopper -d home_shopper \
-     -v ON_ERROR_STOP=1 -f db/001_schema.sql
+docker compose up -d
+for f in db/*.sql; do
+  psql -h localhost -U home_shopper -d home_shopper -v ON_ERROR_STOP=1 -f "$f"
+done
 ```
 
-Testes:
+Tests:
 
 ```bash
 psql -h localhost -U home_shopper -d home_shopper \
@@ -68,41 +91,40 @@ psql -h localhost -U home_shopper -d home_shopper \
 
 ---
 
-## Dados sensíveis
+## Personal data
 
-A **chave de acesso da NFC-e é dado pessoal**, não um id interno: quem a tem
-consulta a nota na SEFAZ sem autenticação e obtém CPF do consumidor,
-endereço e histórico de compras.
+An **NFC-e access key is personal data**, not an internal id: anyone holding it
+can query the receipt at the tax authority without authenticating and obtain
+the buyer's CPF, address and purchase history.
 
-Por isso o repositório contém **apenas fixtures anonimizados**, e existe um
-guard que impede o vazamento:
+This repository therefore contains **anonymised fixtures only**, plus a guard
+that blocks the leak:
 
 ```bash
-python scripts/guard_dados_sensiveis.py          # varre tudo
-python scripts/guard_dados_sensiveis.py --staged # só o que vai pro commit
+python scripts/guard_dados_sensiveis.py          # scan everything
+python scripts/guard_dados_sensiveis.py --staged # only what will be committed
 ```
 
-Ele roda no pre-commit e na CI. Anonimizar preserva o **formato** (44 dígitos
-viram 44 zeros), então o checksum e as validações continuam funcionando de
-verdade.
+It runs on pre-commit and in CI. Anonymising preserves the *format* (44 digits
+become 44 zeros), so the assertions still test the logic rather than the data.
 
-Segredos de verdade ficam em `.env` (veja `.env.example`), nunca no código.
+Real secrets live in `.env` (see `.env.example`), never in code.
 
 ---
 
-## Documentação
+## Documentation
 
-- [`docs/ERD.md`](docs/ERD.md) — diagrama Mermaid e as três decisões centrais
-- `docs/DECISOES.md` — ADRs (planejado)
+- [`docs/ERD.md`](docs/ERD.md) — Mermaid diagram and the central decisions
+- `docs/DECISIONS.md` — ADRs (planned)
 
 ---
 
-## Pipeline planejado
+## Planned pipeline
 
 ```
-FastAPI → PostgreSQL → Celery (fila) → PostgreSQL → dashboard
+FastAPI → PostgreSQL → Celery (queue) → PostgreSQL → dashboard
 ```
 
-O ganho próprio sobre um "price tracker" genérico está na última etapa:
-detectar queda de preço e **acionar a comunicação** — que é o terreno de
-MarTech/CRM, onde já existe experiência.
+The project's own edge over a generic price tracker is the last step: detect
+a price drop and **trigger the communication** — territory where the author
+already has MarTech/CRM experience.

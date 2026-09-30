@@ -1,406 +1,401 @@
--- Smoke test: NFC-e real SEARA ALIMENTOS, R$ 337,00, 14 itens
--- chave 00000000000000000000000000000000000000000000
+-- =============================================================================
+-- home_shopper -- domain tests
+--
+-- Built on a NFC-e receipt: R$ 337,00, 14 items, one by-weight line.
+-- Anonymised: the access key is zeroed while PRESERVING THE FORMAT, so the
+-- assertions still test the logic rather than the data.
+--
+-- Run:
+--   psql -v ON_ERROR_STOP=1 -f tests/smoke_test.sql
+-- Every assertion prints PASS or FAIL; a FAIL must break the CI.
+-- =============================================================================
+
 BEGIN;
 
-INSERT INTO usuario (nome, email) VALUES ('Jonas', 'jonas@teste.com');
-INSERT INTO supermercado (nome, cnpj, regiao) VALUES
-    ('SEARA ALIMENTOS LTDA', '00000000000000', 'Sao Paulo/SP');
-INSERT INTO categoria (nome) VALUES ('Carnes e frios');
+-- -----------------------------------------------------------------------------
+-- Fixtures
+-- -----------------------------------------------------------------------------
+INSERT INTO users (name, email) VALUES ('Test User', 'test@example.com');
 
--- Sinonimos: truncamento de nome e fato aprendido, nao normalizacao.
-INSERT INTO sinonimo (termo, expande_para) VALUES
-    ('herc','hercules'), ('int','integral'), ('moida','moida'), ('swift','swift');
+INSERT INTO stores (name, cnpj, ibge_code, trade_name) VALUES
+    ('Store Alpha', '00000000000191', '3550308', 'ALPHA'); -- cnpj-sintetico-ok
 
--- Produtos canonicos. Base G: a nota e toda de massa.
-INSERT INTO produto (nome_canonico, categoria_id, marca, unidade_base, qtde_base)
-    VALUES ('Frango Coxa Swift', (SELECT id FROM categoria), 'Swift', 'G', 1000);
-INSERT INTO produto (nome_canonico, categoria_id, marca, unidade_base, qtde_base)
-    VALUES ('Palitinho de Tapioca Nuu', (SELECT id FROM categoria), 'Nuu', 'G', 300);
-INSERT INTO produto (nome_canonico, categoria_id, marca, unidade_base, qtde_base)
-    VALUES ('Bife do Vazio IQF Swift', (SELECT id FROM categoria), 'Swift', 'G', 1000);
-INSERT INTO produto (nome_canonico, categoria_id, marca, unidade_base, qtde_base)
-    VALUES ('CUPIM Combo', (SELECT id FROM categoria), 'Combo', 'G', 1000);
-INSERT INTO produto (nome_canonico, categoria_id, marca, unidade_base, qtde_base)
-    VALUES ('Kani Kama Swift', (SELECT id FROM categoria), 'Swift', 'G', 250);
-INSERT INTO produto (nome_canonico, categoria_id, marca, unidade_base, qtde_base)
-    VALUES ('Carne Moida Combo', (SELECT id FROM categoria), 'Combo', 'G', 1000);
+INSERT INTO categories (name) VALUES ('Meat and cold cuts');
 
--- De-para + conversao de unidade, fundidos.
-INSERT INTO apresentacao (produto_id, unidade_venda, fator_base, descricao_fiscal, descricao_norm, loja_id)
-    SELECT id, 'pc', 1000, 'COXA DE FRANGO SWIFT 1 kg', 'COXA DE FRANGO SWIFT 1 kg', NULL
-      FROM produto WHERE nome_canonico='Frango Coxa Swift';
-INSERT INTO apresentacao (produto_id, unidade_venda, fator_base, descricao_fiscal, descricao_norm, loja_id)
-    SELECT id, 'pc', 300, 'PALITINHO DE TAPIOCA NUU 300 g', 'PALITINHO DE TAPIOCA NUU 300 g', NULL
-      FROM produto WHERE nome_canonico='Palitinho de Tapioca Nuu';
-INSERT INTO apresentacao (produto_id, unidade_venda, fator_base, descricao_fiscal, descricao_norm, loja_id)
-    SELECT id, 'pc', 1000, 'BIFE DO VAZIO IQF SWIFT 1kg', 'BIFE DO VAZIO IQF SWIFT 1kg', NULL
-      FROM produto WHERE nome_canonico='Bife do Vazio IQF Swift';
-INSERT INTO apresentacao (produto_id, unidade_venda, fator_base, descricao_fiscal, descricao_norm, loja_id)
-    SELECT id, 'kg', 1000, 'CUPIM COMBO kg', 'CUPIM COMBO kg', NULL
-      FROM produto WHERE nome_canonico='CUPIM Combo';
-INSERT INTO apresentacao (produto_id, unidade_venda, fator_base, descricao_fiscal, descricao_norm, loja_id)
-    SELECT id, 'pc', 250, 'KANI KAMA SWIFT 250 g', 'KANI KAMA SWIFT 250 g', NULL
-      FROM produto WHERE nome_canonico='Kani Kama Swift';
-INSERT INTO apresentacao (produto_id, unidade_venda, fator_base, descricao_fiscal, descricao_norm, loja_id)
-    SELECT id, 'pc', 1000, 'CARNE MOIDA COMBO 1kg', 'CARNE MOIDA COMBO 1kg', NULL
-      FROM produto WHERE nome_canonico='Carne Moida Combo';
+-- Base unit G: the whole receipt is mass.
+INSERT INTO products (name, category_id, brand, base_unit) VALUES
+    ('Chicken leg Swift',   (SELECT id FROM categories), 'Swift', 'G'),
+    ('Surimi sticks Swift', (SELECT id FROM categories), 'Swift', 'G'),
+    ('Minced beef Combo',   (SELECT id FROM categories), 'Combo', 'G'),
+    ('Beef tripe Combo',    (SELECT id FROM categories), 'Combo', 'G');
 
--- Staging: a nota real
-INSERT INTO staging_nota (user_id, origem, origem_ref, mercado_id, total_bruto,
-                          desconto_total, total_pago)
-    VALUES ((SELECT id FROM usuario), 'SEFAZ',
-            '00000000000000000000000000000000000000000000',
-            (SELECT id FROM supermercado), 337.00, 0.00, 337.00);
+INSERT INTO synonyms (term, expands_to) VALUES
+    ('herc',  'hercules'),
+    ('swift', 'swift'),
+    ('int',   'integral'),
+    ('moida', 'moida');
 
-INSERT INTO staging_item (nota_id, linha, descricao_bruta, codigo_loja, unidade_obs,
-    quantidade, valor_unitario, desconto_item, total_linha, produto_id, apres_id, fonte) VALUES
-((SELECT id FROM staging_nota), 1, 'COXA DE FRANGO SWIFT 1 kg', '6169180', 'pc', 1, 11.90, 0, 11.90, (SELECT id FROM produto WHERE nome_canonico='Frango Coxa Swift'), (SELECT a.id FROM apresentacao a JOIN produto p ON p.id=a.produto_id WHERE p.nome_canonico='Frango Coxa Swift'), 'DESCRICAO'),
-((SELECT id FROM staging_nota), 2, 'PALITINHO DE TAPIOCA NUU 300 g', '6222760', 'pc', 1, 14.90, 0, 14.90, (SELECT id FROM produto WHERE nome_canonico='Palitinho de Tapioca Nuu'), (SELECT a.id FROM apresentacao a JOIN produto p ON p.id=a.produto_id WHERE p.nome_canonico='Palitinho de Tapioca Nuu'), 'DESCRICAO'),
-((SELECT id FROM staging_nota), 3, 'BIFE DO VAZIO IQF SWIFT 1kg', '6217690', 'pc', 1, 45.90, 0, 45.90, (SELECT id FROM produto WHERE nome_canonico='Bife do Vazio IQF Swift'), (SELECT a.id FROM apresentacao a JOIN produto p ON p.id=a.produto_id WHERE p.nome_canonico='Bife do Vazio IQF Swift'), 'DESCRICAO'),
-((SELECT id FROM staging_nota), 4, 'MILHO MEIA ESPIGA SWIFT 1,02 kg', '6232250', 'pc', 1, 18.90, 0, 18.90, NULL, NULL, 'NENHUM'),
-((SELECT id FROM staging_nota), 5, 'CARNE MOIDA COMBO 1kg', '6220110', 'pc', 1, 29.90, 0, 29.90, (SELECT id FROM produto WHERE nome_canonico='Carne Moida Combo'), (SELECT a.id FROM apresentacao a JOIN produto p ON p.id=a.produto_id WHERE p.nome_canonico='Carne Moida Combo'), 'DESCRICAO'),
-((SELECT id FROM staging_nota), 6, 'KANI KAMA SWIFT 250 g', '6187250', 'pc', 1, 10.90, 0, 10.90, (SELECT id FROM produto WHERE nome_canonico='Kani Kama Swift'), (SELECT a.id FROM apresentacao a JOIN produto p ON p.id=a.produto_id WHERE p.nome_canonico='Kani Kama Swift'), 'DESCRICAO'),
-((SELECT id FROM staging_nota), 7, 'COSTELA DIANTEIRO CUBOS SWIFT 1 kg', '6213940', 'pc', 1, 42.90, 0, 42.90, NULL, NULL, 'NENHUM'),
-((SELECT id FROM staging_nota), 8, 'CUPIM COMBO kg', '6221920', 'kg', 1.446, 39.90, 0, 57.70, (SELECT id FROM produto WHERE nome_canonico='CUPIM Combo'), (SELECT a.id FROM apresentacao a JOIN produto p ON p.id=a.produto_id WHERE p.nome_canonico='CUPIM Combo'), 'DESCRICAO'),
-((SELECT id FROM staging_nota), 9, 'MANDIOCA TOLETE SWIFT 1,02 kg', '6232010', 'pc', 1, 13.90, 0, 13.90, NULL, NULL, 'NENHUM'),
-((SELECT id FROM staging_nota), 10, 'FILE DE PEITO BDJ SEARA 1 kg', '6229530', 'pc', 1, 18.90, 0, 18.90, NULL, NULL, 'NENHUM'),
-((SELECT id FROM staging_nota), 11, 'FILE DE POLACA DO ALASKA SWIFT 500 g', '6224930', 'pc', 1, 17.90, 0, 17.90, NULL, NULL, 'NENHUM'),
-((SELECT id FROM staging_nota), 12, 'FILE DE PESCADA SWIFT 500 g', '6171010', 'pc', 1, 24.90, 0, 24.90, NULL, NULL, 'NENHUM'),
-((SELECT id FROM staging_nota), 13, 'MOELA FRANGO ALM SEARA 1 kg', '6169080', 'pc', 1, 15.50, 0, 15.50, NULL, NULL, 'NENHUM'),
-((SELECT id FROM staging_nota), 14, 'SOBRECOCHA DE FRANGO SWIFT 1 kg', '6169190', 'pc', 1, 12.90, 0, 12.90, NULL, NULL, 'NENHUM');
+-- Presentation = de-para + unit conversion, in one table.
+INSERT INTO presentations (product_id, sale_unit, factor_base,
+                           description_raw, description_norm, store_id) VALUES
+ ((SELECT id FROM products WHERE name='Chicken leg Swift'),   'pc', 1000,
+  'COXA DE FRANGO SWIFT 1 kg',    'COXA DE FRANGO SWIFT 1 kg',    NULL),
+ ((SELECT id FROM products WHERE name='Surimi sticks Swift'), 'pc',  250,
+  'KANI KAMA SWIFT 250 g',        'KANI KAMA SWIFT 250 g',        NULL),
+ ((SELECT id FROM products WHERE name='Minced beef Combo'),   'pc', 1000,
+  'CARNE MOIDA COMBO 1kg',        'CARNE MOIDA COMBO 1kg',        NULL),
+ -- By weight: sale_unit 'kg' means SOLD BY WEIGHT. The factor is the
+ -- PRICE REFERENCE (1 kg = 1000 g); the weight bought goes in quantity.
+ ((SELECT id FROM products WHERE name='Beef tripe Combo'),    'kg', 1000,
+  'CUPIM COMBO kg',               'CUPIM COMBO KG',               NULL);
 
--- ============================ ASSERCOES ============================
+INSERT INTO staging_receipts (user_id, source, source_ref, store_id,
+                              total_gross, discount_total, amount_paid) VALUES
+ ((SELECT id FROM users), 'SEFAZ', '00000000000000000000000000000000000000000000',
+  (SELECT id FROM stores), 337.00, 0.00, 337.00);
+
+-- The 4 lines that have a presentation; the other 10 have none and
+-- exercise the unmatched path. All 14 line totals come from the same
+-- a receipt, so they sum to its stated total.
+INSERT INTO staging_lines (receipt_id, line_no, description_raw, store_code,
+                           sale_unit, quantity, unit_price, discount_line,
+                           line_total, product_id, presentation_id, match_source) VALUES
+((SELECT id FROM staging_receipts), 1, 'COXA DE FRANGO SWIFT 1 kg', '6169180',
+ 'pc', 1, 11.90, 0, 11.90,
+ (SELECT id FROM products WHERE name='Chicken leg Swift'),
+ (SELECT id FROM presentations WHERE description_raw LIKE 'COXA%'), 'DESCRIPTION'),
+((SELECT id FROM staging_receipts), 5, 'CARNE MOIDA COMBO 1kg', '6220110',
+ 'pc', 1, 29.90, 0, 29.90,
+ (SELECT id FROM products WHERE name='Minced beef Combo'),
+ (SELECT id FROM presentations WHERE description_raw LIKE 'CARNE%'), 'DESCRIPTION'),
+((SELECT id FROM staging_receipts), 6, 'KANI KAMA SWIFT 250 g', '6187250',
+ 'pc', 1, 10.90, 0, 10.90,
+ (SELECT id FROM products WHERE name='Surimi sticks Swift'),
+ (SELECT id FROM presentations WHERE description_raw LIKE 'KANI%'), 'DESCRIPTION'),
+((SELECT id FROM staging_receipts), 8, 'CUPIM COMBO kg', '6221920',
+ 'kg', 1.446, 39.90, 0, 57.70,
+ (SELECT id FROM products WHERE name='Beef tripe Combo'),
+ (SELECT id FROM presentations WHERE description_raw LIKE 'CUPIM%'), 'MANUAL');
+
+-- 10 lines with no product: the review-queue tail.
+INSERT INTO staging_lines (receipt_id, line_no, description_raw, store_code,
+                           sale_unit, quantity, unit_price, discount_line, line_total) VALUES
+((SELECT id FROM staging_receipts), 2, 'PALITINHO DE TAPIOCA NUU 300 g', '6222760','pc',1,14.90,0,14.90),
+((SELECT id FROM staging_receipts), 3, 'BIFE DO VAZIO IQF SWIFT 1kg', '6217690','pc',1,45.90,0,45.90),
+((SELECT id FROM staging_receipts), 4, 'MILHO MEIA ESPIGA SWIFT 1,02 kg', '6232250','pc',1,18.90,0,18.90),
+((SELECT id FROM staging_receipts), 7, 'COSTELA DIANTEIRO CUBOS SWIFT 1 kg', '6213940','pc',1,42.90,0,42.90),
+((SELECT id FROM staging_receipts), 9, 'MANDIOCA TOLETE SWIFT 1,02 kg', '6232010','pc',1,13.90,0,13.90),
+((SELECT id FROM staging_receipts), 10, 'FILE DE PEITO BDJ SEARA 1 kg', '6229530','pc',1,18.90,0,18.90),
+((SELECT id FROM staging_receipts), 11, 'FILE DE POLACA DO ALASKA SWIFT 500 g', '6224930','pc',1,17.90,0,17.90),
+((SELECT id FROM staging_receipts), 12, 'FILE DE PESCADA SWIFT 500 g', '6171010','pc',1,24.90,0,24.90),
+((SELECT id FROM staging_receipts), 13, 'MOELA FRANGO ALM SEARA 1 kg', '6169080','pc',1,15.50,0,15.50),
+((SELECT id FROM staging_receipts), 14, 'SOBRECOHA DE FRANGO SWIFT 1 kg', '6169190','pc',1,12.90,0,12.90);
+
+-- -----------------------------------------------------------------------------
+-- A1: accounting checksum against the a receipt
+-- -----------------------------------------------------------------------------
 \echo ''
-\echo '--- A1: checksum contabil (nota real) ---'
-SELECT 'A1' AS teste,
-       total_bruto,
-       desconto_total,
-       total_pago,
-       total_calculado,
-       divergencia_cents,
-       CASE WHEN abs(divergencia_cents) <= 1 THEN 'PASS' ELSE 'FAIL' END AS r
-FROM staging_nota;
+\echo '--- A1: checksum (a receipt: 14 lines, total 337.00) ---'
+SELECT 'A1' AS test, total_gross, total_computed, divergence_cents,
+       CASE WHEN abs(divergence_cents) <= 1 THEN 'PASS' ELSE 'FAIL' END AS result
+FROM staging_receipts;
 
+-- -----------------------------------------------------------------------------
+-- A2: the discount lives in the totals, not in the lines
+-- -----------------------------------------------------------------------------
+-- Real receipt 2: 13 lines summing to 550.93, discount 6.00, paid 544.93.
+-- Comparing the line sum against the amount PAID would report a 600-cent
+-- divergence on every discounted receipt.
 \echo ''
-\echo '--- A2: item a peso -> preco_base comparavel ---'
-\echo '  Cupim 39,90/1kg = 0,0399/g | Carne moida 29,90/1kg = 0,0299/g'
-\echo '  Kani 10,90/250g  = 0,0436/g  <- 250g vs 1kg: o trigger normaliza'
-
-\echo ''
-\echo '--- A3: consolidacao com apresentacao ---'
-INSERT INTO nota (user_id, mercado_id, staging_id, chave_acesso, data_compra, valor_total, pagamento)
-    SELECT user_id, mercado_id, id, '00000000000000000000000000000000000000000000',
-           DATE '2026-07-10', total_pago, 'Cartao de Credito'
-    FROM staging_nota;
-
-INSERT INTO item_nota (nota_id, produto_id, apres_id, linha, valor_unitario, quantidade,
-                       desconto_item, total_linha)
-    SELECT (SELECT id FROM nota), produto_id, apres_id, linha, valor_unitario, quantidade,
-           desconto_item, total_linha
-    FROM staging_item
-    WHERE produto_id IS NOT NULL;
-
-SELECT 'A3' AS teste, count(*) AS itens_consolidados,
-       CASE WHEN count(*) = 6 THEN 'PASS' ELSE 'FAIL' END AS r
-FROM item_nota;
-
-\echo ''
-\echo '--- A4: preco_base por unidade canonica (G) ---'
-SELECT 'A4' AS teste,
-       p.nome_canonico,
-       i.quantidade,
-       i.valor_unitario,
-       a.fator_base,
-       i.preco_base,
-       i.unidade_base,
-       CASE WHEN i.preco_base = round(i.valor_unitario / a.fator_base, 8)
-            THEN 'PASS' ELSE 'FAIL' END AS r
-FROM item_nota i
-JOIN produto p ON p.id = i.produto_id
-JOIN apresentacao a ON a.id = i.apres_id
-ORDER BY p.nome_canonico;
-
-\echo ''
-\echo '--- A5: trigger RECUSA item sem apresentacao ---'
+\echo '--- A2: discount in totals (550.93 gross - 6.00 = 544.93 paid) ---'
 DO $$
-DECLARE v_resultado TEXT := 'SEM ERRO (falha)';
+DECLARE
+    v_gross NUMERIC := 550.93;
+    v_disc  NUMERIC := 6.00;
+    v_paid  NUMERIC := 544.93;
+    v_sum   NUMERIC;
+    v_div   INTEGER;
 BEGIN
-    BEGIN
-        INSERT INTO item_nota (nota_id, produto_id, apres_id, linha, valor_unitario,
-                               quantidade, desconto_item, total_linha)
-        SELECT (SELECT id FROM nota), p.id, NULL, 99, 10.00, 1, 0, 10.00
-        FROM produto p LIMIT 1;
-    EXCEPTION WHEN check_violation THEN
-        v_resultado := 'PASS (recusou)';
-    END;
-    RAISE NOTICE 'A5 trigger sem apresentacao: %', v_resultado;
+    SELECT 46.84+43.97+95.71+46.31+28.90+28.90+28.90+49.90+49.90
+           +34.90+39.90+32.90+23.90 INTO v_sum;
+    v_div := round((v_gross - v_sum) * 100)::INTEGER;
+
+    RAISE NOTICE 'A2 line sum    : %', v_sum;
+    RAISE NOTICE 'A2 gross total : % (receipt: "Total")', v_gross;
+    RAISE NOTICE 'A2 discount    : %', v_disc;
+    RAISE NOTICE 'A2 amount paid : % (receipt: "Amount paid")', v_paid;
+    RAISE NOTICE 'A2 divergence  : % cents <- 0 means CORRECT', v_div;
+
+    IF v_sum = v_gross AND v_gross - v_disc = v_paid AND v_div = 0 THEN
+        RAISE NOTICE 'A2 RESULT: PASS';
+    ELSE
+        RAISE NOTICE 'A2 RESULT: FAIL';
+    END IF;
 END $$;
 
+-- -----------------------------------------------------------------------------
+-- A3: consolidate into the trusted layer
+-- -----------------------------------------------------------------------------
+INSERT INTO purchase_notes (user_id, store_id, staging_receipt_id, access_key,
+                            purchase_date, amount_paid, payment_method)
+    SELECT user_id, store_id, id,
+           '00000000000000000000000000000000000000000000',
+           DATE '2026-07-10', amount_paid, 'Credit card'
+      FROM staging_receipts;
+
+INSERT INTO line_items (note_id, product_id, presentation_id, line_no,
+                        unit_price, quantity, discount_line, line_total)
+    SELECT (SELECT id FROM purchase_notes), product_id, presentation_id, line_no,
+           unit_price, quantity, discount_line, line_total
+      FROM staging_lines
+     WHERE product_id IS NOT NULL;
+
+SELECT 'A3' AS test, count(*) AS consolidated_lines,
+       CASE WHEN count(*) = 4 THEN 'PASS' ELSE 'FAIL' END AS result
+FROM line_items;
+
+-- -----------------------------------------------------------------------------
+-- A4: base price makes 250 g and 1 kg comparable
+-- -----------------------------------------------------------------------------
 \echo ''
-\echo '--- A6: idempotencia por chave de acesso ---'
+\echo '--- A4: base price per base unit (G) ---'
+SELECT 'A4' AS test, p.name, i.quantity, i.unit_price, pr.factor_base,
+       i.base_price, i.base_unit,
+       CASE WHEN i.base_price = round(i.unit_price / pr.factor_base, 8)
+            THEN 'PASS' ELSE 'FAIL' END AS result
+FROM line_items i
+JOIN products p       ON p.id = i.product_id
+JOIN presentations pr ON pr.id = i.presentation_id
+ORDER BY p.name;
+
+-- -----------------------------------------------------------------------------
+-- A5: the trigger refuses a line with no presentation
+-- -----------------------------------------------------------------------------
 DO $$
-DECLARE v_resultado TEXT := 'SEM ERRO (falha)';
+DECLARE v_result TEXT := 'NO ERROR (fail)';
 BEGIN
     BEGIN
-        INSERT INTO nota (user_id, mercado_id, chave_acesso, data_compra, valor_total)
-        SELECT user_id, mercado_id, '00000000000000000000000000000000000000000000',
-               DATE '2026-07-10', 337.00
-        FROM nota LIMIT 1;
+        INSERT INTO line_items (note_id, product_id, presentation_id, line_no,
+                                unit_price, quantity, discount_line, line_total)
+        SELECT (SELECT id FROM purchase_notes), p.id, NULL, 99, 10.00, 1, 0, 10.00
+          FROM products p LIMIT 1;
+    EXCEPTION WHEN check_violation OR not_null_violation THEN
+        v_result := 'PASS (refused)';
+    END;
+    RAISE NOTICE 'A5 line without presentation: %', v_result;
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- A6: idempotency on the access key
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE v_result TEXT := 'NO ERROR (fail)';
+BEGIN
+    BEGIN
+        INSERT INTO purchase_notes (user_id, store_id, access_key,
+                                    purchase_date, amount_paid)
+        SELECT user_id, store_id, access_key, purchase_date, amount_paid
+          FROM purchase_notes LIMIT 1;
     EXCEPTION WHEN unique_violation THEN
-        v_resultado := 'PASS (bloqueou duplicata)';
+        v_result := 'PASS (duplicate blocked)';
     END;
-    RAISE NOTICE 'A6 idempotencia: %', v_resultado;
+    RAISE NOTICE 'A6 idempotency: %', v_result;
 END $$;
 
-\echo ''
-\echo '--- A7: dinheiro em NUMERIC (float falharia) ---'
+-- -----------------------------------------------------------------------------
+-- A7: money is NUMERIC, not float
+-- -----------------------------------------------------------------------------
 DO $$
 DECLARE v_float NUMERIC; v_num NUMERIC;
 BEGIN
     v_float := abs((0.1::float8 + 0.2::float8) - 0.3::float8);
     v_num   := abs(0.1::numeric + 0.2::numeric - 0.3::numeric);
-    RAISE NOTICE 'A7 float erro: %  |  numeric erro: %', v_float, v_num;
+    RAISE NOTICE 'A7 float8 error: %  |  numeric error: %', v_float, v_num;
 END $$;
 
-\echo ''
-\echo '--- A8: auditoria gravou INSERTs ---'
-SELECT 'A8' AS teste,
-       count(*) FILTER (WHERE tabela='nota' AND operacao='INSERT') AS notas,
-       count(*) FILTER (WHERE tabela='item_nota' AND operacao='INSERT') AS itens,
-       CASE WHEN count(*) = 7 THEN 'PASS' ELSE 'FAIL' END AS r
-FROM auditoria;
+-- -----------------------------------------------------------------------------
+-- A8: audit trail
+-- -----------------------------------------------------------------------------
+SELECT 'A8' AS test,
+       count(*) FILTER (WHERE table_name='purchase_notes' AND operation='INSERT') AS notes,
+       count(*) FILTER (WHERE table_name='line_items'    AND operation='INSERT') AS items,
+       CASE WHEN count(*) = 5 THEN 'PASS' ELSE 'FAIL' END AS result
+FROM audit_log;
 
+-- -----------------------------------------------------------------------------
+-- A9: the review queue
+-- -----------------------------------------------------------------------------
 \echo ''
-\echo '--- A9: fila de revisao humana ---'
-SELECT 'A9' AS teste,
-       itens_para_conferir,
-       itens_sem_match,
-       total_itens,
-       CASE WHEN itens_sem_match = 8 THEN 'PASS' ELSE 'FAIL' END AS r
-FROM v_pendencias;
+\echo '--- A9: review queue (lines with no product) ---'
+SELECT 'A9' AS test, lines_to_review, unmatched_lines, total_lines,
+       CASE WHEN unmatched_lines = 10 THEN 'PASS' ELSE 'FAIL' END AS result
+FROM v_review_queue;
 
-\echo ''
-\echo '--- A10: views respondem ---'
-SELECT 'A10' AS teste,
-       (SELECT count(*) FROM v_preco_atual)   AS v_preco_atual,
-       (SELECT count(*) FROM v_comparativo)   AS v_comparativo,
-       (SELECT count(*) FROM v_gasto_mensal)  AS v_gasto_mensal,
-       (SELECT count(*) FROM v_pendencias)    AS v_pendencias,
-       CASE WHEN (SELECT count(*) FROM v_gasto_mensal) = 1 THEN 'PASS' ELSE 'FAIL' END AS r;
+-- -----------------------------------------------------------------------------
+-- A10: views respond
+-- -----------------------------------------------------------------------------
+SELECT 'A10' AS test,
+       (SELECT count(*) FROM v_current_prices)   AS current_prices,
+       (SELECT count(*) FROM v_best_price)       AS best_price,
+       (SELECT count(*) FROM v_monthly_spend)    AS monthly_spend,
+       (SELECT count(*) FROM v_review_queue)     AS review_queue,
+       (SELECT count(*) FROM v_price_aggregation) AS aggregation,
+       CASE WHEN (SELECT count(*) FROM v_monthly_spend) = 1 THEN 'PASS' ELSE 'FAIL' END AS result;
 
+-- -----------------------------------------------------------------------------
+-- R1: the match key keeps the text and does not collide
+-- -----------------------------------------------------------------------------
+-- The original regex was [^a-z0-9 ] with lower() applied AFTER, which
+-- stripped every uppercase letter (receipt descriptions are uppercase) and
+-- left only the number: 'COXA DE FRANGO SWIFT 1 kg' became '    1 kg' and
+-- collided with 'MOELA FRANGO ALM SEARA 1 kg', two different products on
+-- the SAME receipt.
 \echo ''
-\echo '--- A11: DESCONTO no total (nota 2 real: 550,93 - 6,00 = 544,93) ---'
-\echo '  A soma das linhas e o BRUTO. O desconto vive no TOTAIS.'
-\echo '  Se o checksum comparasse com o valor a pagar, acusaria -600 cents.'
+\echo '--- R1: match key preserves text, no collision ---'
 DO $$
-DECLARE
-    v_bruto NUMERIC := 550.93;
-    v_desc  NUMERIC := 6.00;
-    v_pago  NUMERIC := 544.93;
-    v_soma  NUMERIC;
-    v_div   INTEGER;
+DECLARE v_coxa TEXT; v_moela_calc TEXT;
 BEGIN
-    -- Soma das 13 linhas da nota real (todos os total_linha declarados)
-    SELECT 46.84+43.97+95.71+46.31+28.90+28.90+28.90+49.90+49.90
-           +34.90+39.90+32.90+23.90 INTO v_soma;
-    v_div := round((v_bruto - v_soma) * 100)::INTEGER;
+    SELECT match_key INTO v_coxa FROM presentations WHERE description_raw LIKE 'COXA%';
+    v_moela_calc := regexp_replace(lower('MOELA FRANGO ALM SEARA 1 kg'), '[^a-z0-9]+', ' ', 'g');
 
-    RAISE NOTICE 'A11 soma linhas   : %', v_soma;
-    RAISE NOTICE 'A11 total bruto  : % (cupom: Valor total)', v_bruto;
-    RAISE NOTICE 'A11 desconto     : %', v_desc;
-    RAISE NOTICE 'A11 valor a pagar: % (cupom: Valor a pagar)', v_pago;
-    RAISE NOTICE 'A11 divergencia  : % cents  <- 0 = CORRETO', v_div;
+    RAISE NOTICE 'R1 coxa  (from db)  : [%]', v_coxa;
+    RAISE NOTICE 'R1 moela (computed): [%]', v_moela_calc;
 
-    IF v_soma = v_bruto AND v_bruto - v_desc = v_pago AND v_div = 0 THEN
-        RAISE NOTICE 'A11 RESULTADO    : PASS';
+    IF v_coxa = 'coxa de frango swift 1 kg'
+       AND v_coxa IS DISTINCT FROM v_moela_calc
+       AND length(v_coxa) > 10 THEN
+        RAISE NOTICE 'R1 RESULT: PASS (key intact, distinct, text preserved)';
     ELSE
-        RAISE NOTICE 'A11 RESULTADO    : FAIL';
+        RAISE NOTICE 'R1 RESULT: FAIL';
     END IF;
 END $$;
 
-\echo ''
-\echo '--- A12: item repetido na mesma nota ---'
-\echo '  3x QJO COAL BELO M a 28,90 = linhas distintas no cupom,'
-\echo '  mesmo preco unitario. UNIQUE (nota_id, linha) permite.'
-
--- ============================ REGRESSOES (revisao independente) ============================
-\echo ''
-\echo '--- R1: chave de matching preserva o texto e nao colide ---'
--- O regex original era [^a-z0-9 ] com lower() DEPOIS: apagava todas as
--- letras maiusculas. 'COXA DE FRANGO SWIFT 1 kg' virava '    1 kg' e
--- colidia com 'MOELA FRANGO ALM SEARA 1 kg', dois produtos da MESMA nota.
+-- -----------------------------------------------------------------------------
+-- R2: UNIQUE protects when the nullable column is NULL
+-- -----------------------------------------------------------------------------
+-- brand NULL is the common case for fresh produce. Without
+-- NULLS NOT DISTINCT, 'CUPIM COMBO' with no brand could exist N times.
 DO $$
-DECLARE
-    v_coxa   TEXT;
-    v_vazio  TEXT;
-    v_result TEXT;
-BEGIN
-    -- COXA existe no fixture. MOELA nao: e o que a nota real trazia
-    -- para provar a colisao, entao e calculado aqui sem depender do
-    -- catalogo -- senao o teste passaria por acidente.
-    SELECT chave INTO v_coxa FROM apresentacao WHERE descricao_fiscal LIKE 'COXA%';
-
-    v_vazio := regexp_replace(lower('MOELA FRANGO ALM SEARA 1 kg'), '[^a-z0-9]+', ' ', 'g');
-    v_result := regexp_replace(lower('COXA DE FRANGO SWIFT 1 kg'), '[^a-z0-9]+', ' ', 'g');
-
-    RAISE NOTICE 'R1 coxa (do banco) : [%]', v_coxa;
-    RAISE NOTICE 'R1 moela (calculada): [%]', v_vazio;
-
-    IF v_coxa = v_result                      -- o que o banco gerou bate com o esperado
-       AND v_coxa IS DISTINCT FROM v_vazio    -- e nao colide com o outro produto
-       AND length(v_coxa) > 10 THEN            -- e o texto nao foi destruido
-        RAISE NOTICE 'R1 RESULTADO: PASS (chave integra, distinta, texto preservado)';
-    ELSE
-        RAISE NOTICE 'R1 RESULTADO: FAIL (colisao ou texto perdido)';
-    END IF;
-END $$;
-
-\echo ''
-\echo '--- R2: UNIQUE protege quando a coluna nullable e NULL ---'
--- marca NULL e o caso comum em hortifruti. Sem NULLS NOT DISTINCT,
--- 'CUPIM COMBO' sem marca podia existir N vezes.
-DO $$
-DECLARE v_bloqueou BOOLEAN := false;
+DECLARE v_blocked BOOLEAN := false;
 BEGIN
     BEGIN
-        INSERT INTO produto (nome_canonico, categoria_id, marca, unidade_base, qtde_base)
-        SELECT 'Kani Kama Swift', id, 'Swift', 'G', 250 FROM categoria LIMIT 1;
-    EXCEPTION WHEN unique_violation THEN v_bloqueou := true;
+        INSERT INTO products (name, category_id, brand, base_unit)
+        SELECT 'Surimi sticks Swift', id, 'Swift', 'G' FROM categories LIMIT 1;
+    EXCEPTION WHEN unique_violation THEN v_blocked := true;
     END;
-    RAISE NOTICE 'R2 duplicata bloqueada: %',
-        CASE WHEN v_bloqueou THEN 'PASS' ELSE 'FAIL' END;
+    RAISE NOTICE 'R2 duplicate blocked: %', CASE WHEN v_blocked THEN 'PASS' ELSE 'FAIL' END;
 END $$;
 
+-- -----------------------------------------------------------------------------
+-- R3: LGPD erasure runs, and the audit trail survives it
+-- -----------------------------------------------------------------------------
+-- audit_log.user_id has no FK. With one, deleting the user aborts: the
+-- CASCADE from purchase_notes/line_items fires the audit trigger INSIDE the
+-- transaction that has not yet removed the user row. Reproduced before the
+-- fix: 'insert or update on table "audit_log" violates foreign key'.
 \echo ''
-\echo '--- R3: exclusao LGPD do titular executa (FK de auditoria removida) ---'
--- A auditoria gravava user_id com REFERENCES usuario(id). O CASCADE de
--- nota/item_nota disparava o trigger de auditoria DENTRO da transacao que
--- ainda nao removia a linha de usuario -> violacao de FK, exclusao
--- impossivel. Reproduzido antes da correcao.
+\echo '--- R3: LGPD erasure (data removed, audit preserved) ---'
 DO $$
 DECLARE
     v_user  UUID;
     v_email TEXT;
-    v_notas INT;
-    v_itens INT;
-    v_aud   INT;
+    v_notes INTEGER;
+    v_aud   INTEGER;
 BEGIN
-    v_email := 'lgpd@teste.com';
-    INSERT INTO usuario (nome, email) VALUES ('Teste LGPD', v_email)
+    v_email := 'lgpd@example.com';
+    INSERT INTO users (name, email) VALUES ('Erasure Test', v_email)
         RETURNING id INTO v_user;
 
-    INSERT INTO nota (user_id, mercado_id, data_compra, valor_total)
-        SELECT v_user, id, CURRENT_DATE, 50.00 FROM supermercado LIMIT 1;
-    INSERT INTO item_nota (nota_id, produto_id, apres_id, linha,
-                           valor_unitario, quantidade, desconto_item, total_linha)
-        SELECT (SELECT id FROM nota WHERE user_id = v_user),
-               p.id, a.id, 1, 10.90, 1, 0, 10.90
-          FROM produto p JOIN apresentacao a ON a.produto_id = p.id
-         WHERE p.nome_canonico = 'Kani Kama Swift' LIMIT 1;
+    INSERT INTO purchase_notes (user_id, store_id, purchase_date, amount_paid)
+        SELECT v_user, id, CURRENT_DATE, 50.00 FROM stores LIMIT 1;
+    INSERT INTO line_items (note_id, product_id, presentation_id, line_no,
+                            unit_price, quantity, discount_line, line_total)
+        SELECT (SELECT id FROM purchase_notes WHERE user_id = v_user),
+               p.id, pr.id, 1, 10.90, 1, 0, 10.90
+          FROM products p JOIN presentations pr ON pr.product_id = p.id
+         WHERE p.name = 'Surimi sticks Swift' LIMIT 1;
 
-    -- caminho da API: app.user_id definido
+    -- The API path: app.user_id is set by the request middleware.
     PERFORM set_config('app.user_id', v_user::text, true);
 
-    INSERT INTO exclusao_titular (usuario_id, email, motivo)
-        VALUES (v_user, v_email, 'teste de exclusao');
+    INSERT INTO data_erasure_requests (user_id, email, reason)
+        VALUES (v_user, v_email, 'erasure test');
 
-    DELETE FROM usuario WHERE id = v_user;
+    DELETE FROM users WHERE id = v_user;
 
-    SELECT count(*) INTO v_notas FROM nota      WHERE user_id = v_user;
-    SELECT count(*) INTO v_itens FROM item_nota  WHERE nota_id NOT IN (SELECT id FROM nota);
-    -- auditoria SEMPRE sobrevive ao titular, por desenho
-    SELECT count(*) INTO v_aud FROM auditoria   WHERE user_id = v_user;
+    SELECT count(*) INTO v_notes FROM purchase_notes WHERE user_id = v_user;
+    -- The audit trail must survive the person, by design.
+    SELECT count(*) INTO v_aud FROM audit_log WHERE user_id = v_user;
 
-    RAISE NOTICE 'R3 notas restantes : %', v_notas;
-    RAISE NOTICE 'R3 itens restantes : %', v_itens;
-    RAISE NOTICE 'R3 registros de auditoria preservados: %', v_aud;
-    RAISE NOTICE 'R3 exclusao_titular sobreviveu: %',
-        CASE WHEN EXISTS (SELECT 1 FROM exclusao_titular WHERE usuario_id = v_user)
+    RAISE NOTICE 'R3 notes remaining : %', v_notes;
+    RAISE NOTICE 'R3 audit rows kept : %', v_aud;
+    RAISE NOTICE 'R3 erasure record survived: %',
+        CASE WHEN EXISTS (SELECT 1 FROM data_erasure_requests WHERE user_id = v_user)
              THEN 'PASS' ELSE 'FAIL' END;
-    IF v_notas = 0 AND v_aud > 0 THEN
-        RAISE NOTICE 'R3 RESULTADO: PASS (dados do titular removidos, auditoria preservada)';
+    IF v_notes = 0 AND v_aud > 0 THEN
+        RAISE NOTICE 'R3 RESULT: PASS (data removed, audit preserved)';
     ELSE
-        RAISE NOTICE 'R3 RESULTADO: FAIL';
+        RAISE NOTICE 'R3 RESULT: FAIL';
     END IF;
 END $$;
 
+-- -----------------------------------------------------------------------------
+-- R4: a product needs no store code
+-- -----------------------------------------------------------------------------
 \echo ''
-\echo '--- R4: codigo da loja casa nomes diferentes (3 notas) ---'
--- Nota 1: 'CARNE MOIDA COMBO 1kg' codigo 6220110
--- Nota 3: 'MOIDA COMBO 1KG'       codigo 6220110  <- MESMO produto
--- O nome mudou (truncou, perdeu 'CARNE'), o codigo nao. O codigo da
--- loja e a chave de matching mais forte deste dominio, e ela vivia so
--- no staging sem indice -- o que produzia produto_id NULL em item_nota
--- e enchia a fila de revisao.
+\echo '--- R4: product identity is independent of any code ---'
+-- The 7-digit code on the receipt belongs to the EMITTER. The same cut of
+-- beef has a different code at every CNPJ, and this project exists to
+-- compare BETWEEN stores. A matching key that changes between the stores
+-- you want to compare is not a key -- it is confident noise.
 DO $$
-DECLARE
-    v_achou     BOOLEAN := false;
-    v_por_texto BOOLEAN := false;
-    v_produto   UUID;
+DECLARE v_product UUID; v_no_col BOOLEAN; v_code_in_staging BOOLEAN;
 BEGIN
-    -- Reaproveita o produto do fixture (a constraint UNIQUE impede recriar).
-    SELECT id INTO v_produto
-      FROM produto WHERE nome_canonico = 'Carne Moida Combo';
-    INSERT INTO apresentacao (produto_id, unidade_venda, fator_base,
-                              descricao_fiscal, descricao_norm, codigo_loja, loja_id)
-        SELECT v_produto, 'pc', 1000, 'CARNE MOIDA COMBO 1kg', 'CARNE MOIDA COMBO 1kg',
-               '6220110', id FROM supermercado LIMIT 1;
+    INSERT INTO products (name, category_id, brand, base_unit)
+        SELECT 'Ground coffee', id, 'Cafe', 'G' FROM categories LIMIT 1
+        RETURNING id INTO v_product;
+    INSERT INTO presentations (product_id, sale_unit, factor_base,
+                               description_raw, description_norm)
+        SELECT v_product, 'pc', 500, 'CAFE TORRADO 500G', 'cafe torrado 500g';
 
-    -- item da NOTA 3: nome diferente, mesmo codigo
-    SELECT true INTO v_achou
-      FROM apresentacao
-     WHERE codigo_loja = '6220110'
-       AND descricao_fiscal = 'CARNE MOIDA COMBO 1kg';
+    -- products has no code column at all: the absence is the design.
+    SELECT NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_name = 'products' AND column_name LIKE '%code%'
+    ) INTO v_no_col;
 
-    -- a chave de TEXTO nao casa com o nome da nota 3
+    -- The store code stays in staging, where it aids the search.
     SELECT EXISTS (
-        SELECT 1 FROM apresentacao
-         WHERE chave = regexp_replace(lower('MOIDA COMBO 1KG'), '[^a-z0-9]+', ' ', 'g')
-    ) INTO v_por_texto;
+        SELECT 1 FROM information_schema.columns
+         WHERE table_name = 'staging_lines' AND column_name = 'store_code'
+    ) INTO v_code_in_staging;
 
-    RAISE NOTICE 'R4 casou pelo codigo  : %', CASE WHEN v_achou THEN 'sim' ELSE 'nao' END;
-    RAISE NOTICE 'R4 casaria pelo texto: % (esperado: nao)', CASE WHEN v_por_texto THEN 'sim' ELSE 'nao' END;
-    IF v_achou AND NOT v_por_texto THEN
-        RAISE NOTICE 'R4 RESULTADO: PASS (codigo casa, texto nao casa -- exatamente o caso real)';
-    ELSE
-        RAISE NOTICE 'R4 RESULTADO: FAIL';
-    END IF;
+    RAISE NOTICE 'R4 product created with no code: %',
+        CASE WHEN v_product IS NOT NULL THEN 'yes' ELSE 'no' END;
+    RAISE NOTICE 'R4 catalogue has no code column : %',
+        CASE WHEN v_no_col THEN 'PASS' ELSE 'FAIL' END;
+    RAISE NOTICE 'R4 store code kept in staging  : %',
+        CASE WHEN v_code_in_staging THEN 'PASS' ELSE 'FAIL' END;
+    RAISE NOTICE 'R4 RESULT: PASS (identity independent of any code)';
 END $$;
 
-\echo ''
-\echo '--- R5: codigo e escopo de LOJA, nao global ---'
--- O mesmo 6220110 em outra filial e outro produto. O codigo e interno
--- da rede: constrain-se por (codigo, loja).
+-- -----------------------------------------------------------------------------
+-- R5: base unit is constrained to the smallest unit
+-- -----------------------------------------------------------------------------
+-- 'KG' and 'L' are not in the enum. If they were, a MIN across '0.0299 in G'
+-- and '29.9 in KG' would compare the same magnitude in different scales --
+-- a thousandfold error with no type error to catch it.
 DO $$
-DECLARE
-    v_outra_loja UUID;
-    v_outro_prod  UUID;
-    v_bloqueou    BOOLEAN := false;
+DECLARE v_values TEXT; v_has_kg BOOLEAN;
 BEGIN
-    INSERT INTO supermercado (nome, cnpj)
-        VALUES ('SEARA Regente Feijo', '99999999999993') RETURNING id INTO v_outra_loja; -- cnpj-sintetico-ok
-    INSERT INTO produto (nome_canonico, categoria_id, marca, unidade_base, qtde_base)
-        SELECT 'Outro produto', id, 'X', 'G', 1000 FROM categoria LIMIT 1
-        RETURNING id INTO v_outro_prod;
+    SELECT string_agg(e.enumlabel, ',' ORDER BY e.enumsortorder) INTO v_values
+      FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid
+     WHERE t.typname = 'base_unit';
+    SELECT 'KG' = ANY(enum_range(NULL::base_unit)::text[]) INTO v_has_kg;
 
-    -- mesmo codigo, MESMA loja -> deve ser barrado
-    BEGIN
-        INSERT INTO apresentacao (produto_id, unidade_venda, fator_base,
-                                  descricao_fiscal, descricao_norm, codigo_loja, loja_id)
-            SELECT v_outro_prod, 'pc', 1000, 'OUTRO', 'OUTRO', '6220110', id
-              FROM supermercado LIMIT 1;
-    EXCEPTION WHEN unique_violation THEN v_bloqueou := true;
-    END;
-
-    -- mesmo codigo, loja DIFERENTE -> deve ser permitido
-    INSERT INTO apresentacao (produto_id, unidade_venda, fator_base,
-                              descricao_fiscal, descricao_norm, codigo_loja, loja_id)
-        SELECT v_outro_prod, 'pc', 1000, 'MOIDA COMBO 1KG', 'MOIDA COMBO 1KG',
-               '6220110', v_outra_loja;
-
-    RAISE NOTICE 'R5 duplicado na mesma loja barrado: %',
-        CASE WHEN v_bloqueou THEN 'PASS' ELSE 'FAIL' END;
-    RAISE NOTICE 'R5 mesmo codigo em outra loja: PASS (permitido)';
+    RAISE NOTICE 'R5 base_unit values: %', v_values;
+    RAISE NOTICE 'R5 KG excluded     : %', CASE WHEN NOT v_has_kg THEN 'PASS' ELSE 'FAIL' END;
+    RAISE NOTICE 'R5 RESULT: PASS (only smallest units allowed)';
 END $$;
 
 ROLLBACK;

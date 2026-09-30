@@ -7,18 +7,18 @@ on:
 
 jobs:
   guard:
-    name: Guard de dados sensiveis
+    name: Guard -- no personal data
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Nenhum dado pessoal pode ser versionado
+      - name: No personal data may be committed
         run: python scripts/guard_dados_sensiveis.py
 
   schema:
-    name: Schema e testes de dominio
+    name: Schema and domain tests
     runs-on: ubuntu-latest
 
     services:
@@ -35,56 +35,86 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
-    env:
-      PGPASSWORD: ci
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: Instalar cliente psql
+      - name: Install psql client
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
 
-      - name: Criar schema
+      - name: Apply schema
         env:
           PGPASSWORD: ci
         run: |
-          for f in db/001_schema.sql db/002_triggers_views.sql db/003_indexes_views.sql; do
+          set -euo pipefail
+          for f in db/*.sql; do
             echo "::group::$f"
             psql -h localhost -U home_shopper -d home_shopper -v ON_ERROR_STOP=1 -f "$f"
             echo "::endgroup::"
           done
 
-      - name: Smoke test
+      - name: Domain tests
         env:
           PGPASSWORD: ci
         run: |
           psql -h localhost -U home_shopper -d home_shopper \
                -v ON_ERROR_STOP=1 -f tests/smoke_test.sql | tee /tmp/smoke.log
 
-      - name: Falhar se algum teste falhar
+      - name: Fail on any failing assertion
         env:
           PGPASSWORD: ci
         run: |
-          if grep -qE "FAIL" /tmp/smoke.log; then
-            echo "::error::houve assercao FAIL"
-            grep -nE "FAIL" /tmp/smoke.log
-            exit 1
+          status=0
+          if grep -qE "^psql:.*ERROR" /tmp/smoke.log; then
+            echo "::error::SQL error during the tests"
+            grep -nE "^psql:.*ERROR" /tmp/smoke.log
+            status=1
           fi
-          if grep -qE "ERROR" /tmp/smoke.log; then
-            echo "::error::houve ERROR no smoke test"
-            grep -nE "ERROR" /tmp/smoke.log
-            exit 1
+          if grep -qE "\|[[:space:]]*FAIL" /tmp/smoke.log; then
+            echo "::error::a test assertion reported FAIL"
+            grep -nE "\|[[:space:]]*FAIL" /tmp/smoke.log
+            status=1
           fi
-          echo "todos os testes passaram"
+          # 5 DO blocks report "RESULT: PASS" (A2, A5, A6, R1..R5 are
+          # NOTICE-based). The table assertions A1/A3/A4/A8/A9/A10 print
+          # PASS as a column, checked separately above.
+          blocks=$(grep -c "RESULT: PASS" /tmp/smoke.log || true)
+          passed=$(grep -c "PASS" /tmp/smoke.log || true)
+          echo "assertion blocks: $blocks, PASS mentions: $passed"
+          if [ "$blocks" -lt 5 ]; then
+            echo "::error::expected 5 assertion blocks to report PASS, got $blocks"
+            status=1
+          fi
+          if [ "$passed" -lt 20 ]; then
+            echo "::error::expected at least 20 PASS results, got $passed"
+            status=1
+          fi
+          exit $status
 
-      - name: Estrutura criada
+      - name: Every constraint is named
+        env:
+          PGPASSWORD: ci
+        run: |
+          unnamed=$(psql -h localhost -U home_shopper -d home_shopper -tAc "
+            SELECT coalesce(string_agg(conname, ', '), '')
+              FROM pg_constraint c
+              JOIN pg_namespace n ON n.oid = c.connamespace
+             WHERE n.nspname = 'public'
+               AND c.conname !~ '^(pk|uk|ck|fk)_';")
+          if [ -n "$unnamed" ]; then
+            echo "::error::unnamed constraints: $unnamed"
+            exit 1
+          fi
+          echo "all constraints follow the pk_/uk_/ck_/fk_ convention"
+
+      - name: Structure created
         env:
           PGPASSWORD: ci
         run: |
           psql -h localhost -U home_shopper -d home_shopper -tAc "
-            select 'tabelas: ' || count(*) from information_schema.tables
-             where table_schema='public' and table_type='BASE TABLE';
-            select 'views: '   || count(*) from information_schema.views
-             where table_schema='public';
-            select 'triggers: '|| count(*) from information_schema.triggers
-             where trigger_schema='public';"
+            SELECT 'tables:  ' || count(*) FROM information_schema.tables
+             WHERE table_schema='public' AND table_type='BASE TABLE';
+            SELECT 'views:   ' || count(*) FROM information_schema.views
+             WHERE table_schema='public';
+            SELECT 'indexes: ' || count(*) FROM pg_indexes WHERE schemaname='public';
+            SELECT 'triggers:' || count(*) FROM information_schema.triggers
+             WHERE trigger_schema='public';"

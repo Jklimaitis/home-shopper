@@ -1,0 +1,41 @@
+# =============================================================================
+# FIM DE LINHA -- CRLF vs LF
+#
+# Este repositorio tem arquivos .sql com CRLF (\r\n), que o git estava
+# avisando a cada comando ("LF will be replaced by CRLF") e que eu deixei
+# passar. O \r no fim da linha e lido pelo PostgreSQL como parte do statement,
+# e o parser engole a linha seguinte.
+#
+# Sintoma observado: a MESMA tabela criava via psql -c e falhava via
+# psql -f, com erros que nao faziam sentido ("relation does not exist"
+# para uma tabela recem-criada no mesmo arquivo).
+#
+# Regra: SQL e YAML usam LF, sempre. O Windows nao altera isso.
+# =============================================================================
+
+# Normaliza o que esta no repo para LF no commit
+* text=auto eol=lf
+
+# Arquivos que o PostgreSQL le: LF obrigatorio
+*.sql    text eol=lf
+*.yaml   text eol=lf
+*.yml    text eol=lf
+*.json   text eol=lf
+
+# Python e shell tambem em LF (funciona em Windows e Linux)
+*.py     text eol=lf
+*.sh     text eol=lf
+
+# Binarios: nunca tocar
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.webp   binary
+*.ico    binary
+*.pdf    binary
+*.zip    binary
+*.woff   binary
+*.woff2  binary
+*.ttf    binary
+*.eot    binary

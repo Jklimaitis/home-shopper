@@ -74,3 +74,8 @@ desktop.ini
 # Logs
 *.log
 logs/
+
+# Arquivos de depuracao temporarios
+_pr*.sql
+_iso*.sql
+_*.sql
