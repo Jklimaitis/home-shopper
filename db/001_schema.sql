@@ -64,12 +64,26 @@ CREATE TABLE categoria (
 -- -----------------------------------------------------------------------------
 -- Produto canonico -- a identidade do que e comprado.
 --
--- A nota real mostrou: 0 de 14 itens tem EAN. O codigo impresso (7 digitos)
--- e interno da rede e muda entre lojas. Entao EAN e opportunistico, nunca
--- a chave. A identidade real e (marca + nome normalizado + tamanho).
+-- Das 3 notas analisadas (42 itens), ZERO tem EAN. O codigo impresso
+-- tem 7 digitos e e interno da rede, nao codigo de barras.
 --
--- qtde_base e o tamanho estruturado, SEPARADO da descricao. Sem ele,
--- "LEITE 1L" e "LEITE 900ML" viram o mesmo produto indevidamente.
+-- A CORRECAO IMPORTANTE: eu tratei esse codigo como se fosse inutil, por
+-- mudar entre lojas. As tres notas mostram o contrario -- dentro da MESMA
+-- rede ele e ESTAVEL, e e o unico identificador que sobrevive a mudanca
+-- de nome:
+--
+--   Nota 1 (jul/2026): 'CARNE MOIDA COMBO 1kg'  codigo 6220110  R$ 29,90
+--   Nota 3 (mar/2025): 'MOIDA COMBO 1KG'        codigo 6220110  R$ 27,90
+--
+-- Mesmo codigo, nome diferente, preco diferente. O nome trunca, muda de
+-- grafia, perde palavras ('CARNE' sumiu). O codigo nao.
+--
+-- Consequencia: o codigo da loja e a CHAVE DE MATCHING mais forte que
+-- existe neste dominio, e ela vivia so no staging, sem indice. Isso e
+-- 'produto_id NULL' em item_nota -- e a fila de revisao enchendo.
+--
+-- Escopo: por (codigo, mercado_id). O mesmo codigo em redes diferentes
+-- sao produtos diferentes.
 -- -----------------------------------------------------------------------------
 CREATE TABLE produto (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -145,6 +159,17 @@ CREATE TABLE apresentacao (
     -- num espaco unico, para que '1 kg', '1kg' e '1  kg' gerem a mesma chave.
     chave          TEXT GENERATED ALWAYS AS
         (regexp_replace(lower(descricao_norm), '[^a-z0-9]+', ' ', 'g')) STORED,
+    -- Codigo interno da LOJA, como impresso no cupom (7 digitos na SEARA).
+    -- NAO e EAN: nao identifica o produto no mercado nacional.
+    --
+    -- Mas dentro de uma rede ele e ESTAVEL entre notas, e sobrevive a
+    -- mudanca de nome que quebra o matching textual:
+    --   'CARNE MOIDA COMBO 1kg' (nota 1) e 'MOIDA COMBO 1KG' (nota 3)
+    -- tem o MESMO codigo 6220110.
+    --
+    -- Por isso (codigo_loja, mercado_id) e o caminho de matching mais
+    -- forte que existe aqui, e a chave de descricao e o fallback.
+    codigo_loja   TEXT,
     loja_id        UUID REFERENCES supermercado(id) ON DELETE CASCADE,
     criado_em      TIMESTAMPTZ NOT NULL DEFAULT now(),
     -- NULLS NOT DISTINCT: loja_id NULL significa 'global', que e o caso
@@ -155,7 +180,12 @@ CREATE TABLE apresentacao (
     -- que a apresentacao pertence ao produto informado. Sem isto, a
     -- coerencia dependeria so do trigger, e o staging -- que e onde o
     -- matcher erra -- aceitaria o par inconsistente.
-    CONSTRAINT apres_id_produto UNIQUE (id, produto_id)
+    CONSTRAINT apres_id_produto UNIQUE (id, produto_id),
+    -- O codigo da loja identifica o produto DENTRO da rede. Constraint
+    -- separado porque e outra granularidade: a chave de descricao amarra
+    -- produto+texto, esta amarra produto+codigo+rede.
+    CONSTRAINT apres_codigo_unico
+        UNIQUE NULLS NOT DISTINCT (produto_id, codigo_loja, loja_id)
 );
 
 COMMIT;

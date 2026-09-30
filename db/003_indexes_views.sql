@@ -19,6 +19,12 @@ CREATE INDEX idx_sinonimo_expande ON sinonimo (expande_para);
 CREATE INDEX idx_apres_chave ON apresentacao (chave);
 CREATE INDEX idx_apres_produto ON apresentacao (produto_id);
 CREATE INDEX idx_apres_prod_unid ON apresentacao (produto_id, unidade_venda);
+-- CAMINHO QUENTE DO MATCHING: por (codigo, mercado). E exato, e nao
+-- depende de nome. As 3 notas mostram que o nome muda entre notas
+-- da mesma rede (6220110 aparece como 'CARNE MOIDA COMBO 1kg' e como
+-- 'MOIDA COMBO 1KG') enquanto o codigo nao muda.
+CREATE UNIQUE INDEX uq_apres_codigo_mercado
+    ON apresentacao (codigo_loja, loja_id) WHERE codigo_loja IS NOT NULL;
 
 -- Staging
 CREATE INDEX idx_stg_nota_user_status ON staging_nota (user_id, status);
@@ -142,6 +148,10 @@ GROUP BY n.user_id, n.mercado_id, m.nome,
 
 -- Fila de trabalho da tela de conferencia: o que precisa de olho humano.
 -- Prioriza divergencia contabil (valor fechado errado) acima de item sem match.
+--
+-- descricao_bruta, codigo_loja e unidade_obs sao trazidos aqui de
+-- proposito: sem eles a tela de revisao mostrava um NULL e o usuario
+-- nao tinha como decidir o que casar.
 CREATE VIEW v_pendencias AS
 SELECT
     sn.id AS staging_id,

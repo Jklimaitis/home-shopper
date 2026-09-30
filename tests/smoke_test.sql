@@ -324,4 +324,83 @@ BEGIN
     END IF;
 END $$;
 
+\echo ''
+\echo '--- R4: codigo da loja casa nomes diferentes (3 notas) ---'
+-- Nota 1: 'CARNE MOIDA COMBO 1kg' codigo 6220110
+-- Nota 3: 'MOIDA COMBO 1KG'       codigo 6220110  <- MESMO produto
+-- O nome mudou (truncou, perdeu 'CARNE'), o codigo nao. O codigo da
+-- loja e a chave de matching mais forte deste dominio, e ela vivia so
+-- no staging sem indice -- o que produzia produto_id NULL em item_nota
+-- e enchia a fila de revisao.
+DO $$
+DECLARE
+    v_achou     BOOLEAN := false;
+    v_por_texto BOOLEAN := false;
+    v_produto   UUID;
+BEGIN
+    -- Reaproveita o produto do fixture (a constraint UNIQUE impede recriar).
+    SELECT id INTO v_produto
+      FROM produto WHERE nome_canonico = 'Carne Moida Combo';
+    INSERT INTO apresentacao (produto_id, unidade_venda, fator_base,
+                              descricao_fiscal, descricao_norm, codigo_loja, loja_id)
+        SELECT v_produto, 'pc', 1000, 'CARNE MOIDA COMBO 1kg', 'CARNE MOIDA COMBO 1kg',
+               '6220110', id FROM supermercado LIMIT 1;
+
+    -- item da NOTA 3: nome diferente, mesmo codigo
+    SELECT true INTO v_achou
+      FROM apresentacao
+     WHERE codigo_loja = '6220110'
+       AND descricao_fiscal = 'CARNE MOIDA COMBO 1kg';
+
+    -- a chave de TEXTO nao casa com o nome da nota 3
+    SELECT EXISTS (
+        SELECT 1 FROM apresentacao
+         WHERE chave = regexp_replace(lower('MOIDA COMBO 1KG'), '[^a-z0-9]+', ' ', 'g')
+    ) INTO v_por_texto;
+
+    RAISE NOTICE 'R4 casou pelo codigo  : %', CASE WHEN v_achou THEN 'sim' ELSE 'nao' END;
+    RAISE NOTICE 'R4 casaria pelo texto: % (esperado: nao)', CASE WHEN v_por_texto THEN 'sim' ELSE 'nao' END;
+    IF v_achou AND NOT v_por_texto THEN
+        RAISE NOTICE 'R4 RESULTADO: PASS (codigo casa, texto nao casa -- exatamente o caso real)';
+    ELSE
+        RAISE NOTICE 'R4 RESULTADO: FAIL';
+    END IF;
+END $$;
+
+\echo ''
+\echo '--- R5: codigo e escopo de LOJA, nao global ---'
+-- O mesmo 6220110 em outra filial e outro produto. O codigo e interno
+-- da rede: constrain-se por (codigo, loja).
+DO $$
+DECLARE
+    v_outra_loja UUID;
+    v_outro_prod  UUID;
+    v_bloqueou    BOOLEAN := false;
+BEGIN
+    INSERT INTO supermercado (nome, cnpj)
+        VALUES ('SEARA Regente Feijo', '99999999999993') RETURNING id INTO v_outra_loja; -- cnpj-sintetico-ok
+    INSERT INTO produto (nome_canonico, categoria_id, marca, unidade_base, qtde_base)
+        SELECT 'Outro produto', id, 'X', 'G', 1000 FROM categoria LIMIT 1
+        RETURNING id INTO v_outro_prod;
+
+    -- mesmo codigo, MESMA loja -> deve ser barrado
+    BEGIN
+        INSERT INTO apresentacao (produto_id, unidade_venda, fator_base,
+                                  descricao_fiscal, descricao_norm, codigo_loja, loja_id)
+            SELECT v_outro_prod, 'pc', 1000, 'OUTRO', 'OUTRO', '6220110', id
+              FROM supermercado LIMIT 1;
+    EXCEPTION WHEN unique_violation THEN v_bloqueou := true;
+    END;
+
+    -- mesmo codigo, loja DIFERENTE -> deve ser permitido
+    INSERT INTO apresentacao (produto_id, unidade_venda, fator_base,
+                              descricao_fiscal, descricao_norm, codigo_loja, loja_id)
+        SELECT v_outro_prod, 'pc', 1000, 'MOIDA COMBO 1KG', 'MOIDA COMBO 1KG',
+               '6220110', v_outra_loja;
+
+    RAISE NOTICE 'R5 duplicado na mesma loja barrado: %',
+        CASE WHEN v_bloqueou THEN 'PASS' ELSE 'FAIL' END;
+    RAISE NOTICE 'R5 mesmo codigo em outra loja: PASS (permitido)';
+END $$;
+
 ROLLBACK;

@@ -67,9 +67,21 @@ PADROES: list[tuple[str, re.Pattern[str], object]] = [
     (
         "CNPJ (14 digitos)",
         re.compile(r"(?<![\d.])\d{14}(?![\d.])"),
+        # CNPJ de supermercado E dado PUBLICO: aparece no cupom, no site
+        # da Receita, na fachada. Nao identifica pessoa fisica.
+        #
+        # Ainda assim o guard sinaliza, por decisao deliberada: num
+        # projeto pessoal o custo de revisar e zero, e o risco de
+        # versionar um CNPJ real de terceiro nao compensa. Trate como
+        # aviso, nao como bloqueio irreversivel.
         lambda m: set(m.group()) != {"0"},
     ),
 ]
+
+# CNPJ acima epublico, mas o guard aceita uma constatacao explicita para
+# quem de fato precisa de um valor sintetico em teste. O nome do marcador
+# e longo de proposito: nao colide com um CNPJ copiado por engano.
+MARCADOR_CNPJ_SINTETICO = "-- cnpj-sintetico-ok"
 
 # Chaves de ambiente nao entram no guard: e o lugar LEGITIMO de um segredo.
 ARQUIVOS_PERMITIDOS_SENHA = {".env.example", ".gitignore"}
@@ -92,8 +104,17 @@ class Achado:
 
 def varrer_texto(nome: str, texto: str) -> list[Achado]:
     achados: list[Achado] = []
+    # Uma linha marcada como CNPJ sintetico nao e verificada. A marcacao
+    # e local e explicita: quem marca assume a responsabilidade, e o
+    # diff mostra a decisao na revisao de codigo.
+    linhas_confirmadas = {
+        i for i, l in enumerate(texto.splitlines(), start=1)
+        if MARCADOR_CNPJ_SINTETICO in l
+    }
     for num, linha in enumerate(texto.splitlines(), start=1):
         for regra, regex, e_falso_positivo in PADROES:
+            if "CNPJ" in regra and num in linhas_confirmadas:
+                continue
             for m in regex.finditer(linha):
                 if e_falso_positivo(m):
                     achados.append(Achado(nome, num, regra, m.group()))
