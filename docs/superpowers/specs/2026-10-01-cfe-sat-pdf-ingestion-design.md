@@ -1,7 +1,8 @@
 ---
 title: CF-e-SAT scanned-document intake
 project: home_shopper
-status: draft-for-user-review
+status: approved
+implementation_status: deferred
 created: 2026-10-01
 ---
 
