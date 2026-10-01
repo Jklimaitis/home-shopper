@@ -95,7 +95,7 @@ psql -h localhost -U home_shopper -d home_shopper \
 
 An **NFC-e access key is personal data**, not an internal id: anyone holding it
 can query the receipt at the tax authority without authenticating and obtain
-the buyer's CPF, address and purchase history.
+the buyer's CPF, address and purchase history. So is the buyer's **CPF**.
 
 This repository therefore contains **anonymised fixtures only**, plus a guard
 that blocks the leak:
@@ -107,6 +107,13 @@ python scripts/guard_dados_sensiveis.py --staged # only what will be committed
 
 It runs on pre-commit and in CI. Anonymising preserves the *format* (44 digits
 become 44 zeros), so the assertions still test the logic rather than the data.
+
+**A store's CNPJ is deliberately not guarded.** It identifies a *legal person*,
+not an individual: the registry is public, the number is printed on the receipt
+and on the shop front, and sanitising it would protect nobody. Real store CNPJs
+belong in the fixtures — a `stores` table with the actual retail networks is what
+makes the comparison credible. (The access key embeds the issuer's CNPJ, but the
+key stays blocked because it also carries the consumer's data.)
 
 Real secrets live in `.env` (see `.env.example`), never in code.
 

@@ -18,7 +18,7 @@ BEGIN;
 INSERT INTO users (name, email) VALUES ('Test User', 'test@example.com');
 
 INSERT INTO stores (name, cnpj, ibge_code, trade_name) VALUES
-    ('Store Alpha', '00000000000191', '3550308', 'ALPHA'); -- cnpj-sintetico-ok
+    ('Store Alpha', '00000000000191', '3550308', 'ALPHA');
 
 INSERT INTO categories (name) VALUES ('Meat and cold cuts');
 

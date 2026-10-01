@@ -9,7 +9,6 @@ alguem lembrar de rodar.
 O que e considerado sensivel:
   - chave de acesso de NFC-e (44 digitos) nao composta so de zeros
   - CPF: 11 digitos, nao composto so de zeros
-  - CNPJ: 14 digitos, nao composto so de zeros
 
 Por que chave de acesso e dado pessoal
 --------------------------------------
@@ -18,12 +17,26 @@ consulta a nota na SEFAZ sem autenticacao e obtem CPF do consumidor,
 endereco de entrega, itens e valores. E a porta de entrada para os dados
 do consumidor, nao um id interno do sistema. Por isso nunca versionada.
 
-O que NAO e considerado sensivel aqui
--------------------------------------
-CNPJ de supermercado e dado publico de empresa (visivel no cupom e no
-cadastro da Receita). Este guard ainda assim o sinaliza, porque num
-projeto pessoal o custo de revisar e zero e o risco de publishar um
-fixture com dados de terceiro nao vale. Ajuste a lista se precisar.
+O formato da chave EMBUTE o CNPJ do emitente (posicoes 7-20), mas isso
+nao muda a conclusao: a chave carrega tambem os dados do consumidor, e
+por isso continua bloqueada. Ver "Por que CNPJ nao e sensivel" abaixo.
+
+Por que CNPJ NAO e sensivel
+----------------------------
+CNPJ identifica uma PESSOA JURIDICA, nao uma pessoa fisica. O cadastro
+e publico: qualquer um consulta na Receita Federal sem autenticacao, o
+numero esta impresso no cupom de compra e na fachada do estabelecimento.
+A LGPD protege dado pessoal -- e dado de empresa nao e dado pessoal.
+
+Um CNPJ de supermercado, portanto, nao e segredo. Sanitiza-lo nao
+protegia ninguem: o mesmo numero pode ser buscado em segundos. Guardar
+um CNPJ real em fixture e normal, e o dado fica util para o portfolio
+(um `stores` com redes reais e o que da credibilidade ao projeto).
+
+Isto NAO se aplica a um CNPJ de MEI ou de pessoa fisica em que o
+proprietario e o proprio titular -- nesse caso o CNPJ funciona como
+identificador individual. O guard sinaliza CPF e chave de acesso, que
+cobrem esse risco.
 
 Uso
 ---
@@ -51,11 +64,27 @@ VARRER = {
 }
 
 # Padroes. Cada um: (nome, regex, funcao de predicao do falso positivo)
+#
+# NAO ha padrao de CNPJ aqui, de proposito. CNPJ identifica pessoa juridica
+# e o cadastro e publico -- sanitiza-lo nao protege ninguem. Um CNPJ real de
+# supermercado em fixture e legivel e correto. O que protege a pessoa fisica
+# (CPF, chave de acesso) segue bloqueado abaixo.
+#
+# IMPORTANTE: chave e CPF sao checadas nas DUAS formas, com e sem
+# pontuacao. Um guard que so enxerga 44 digitos seguidos deixa passar a
+# chave escrita no formato oficial, que e como a pessoa copia do app
+# da SEFAZ -- ou seja, como ela chega na pratica.
 PADROES: list[tuple[str, re.Pattern[str], object]] = [
     (
         "chave de acesso NFC-e (44 digitos)",
         re.compile(r"(?<![\d.])\d{44}(?![\d.])"),
         lambda m: set(m.group()) != {"0"},
+    ),
+    (
+        "chave de acesso NFC-e (formatada, com hifens)",
+        # Layout oficial: 2-4-14-2-3-9-9-1 = 44 digitos em 8 grupos.
+        re.compile(r"(?<![\d-])\d{2}-\d{4}-\d{14}-\d{2}-\d{3}-\d{9}-\d{9}-\d(?![\d-])"),
+        lambda m: set(m.group().replace("-", "")) != {"0"},
     ),
     (
         "CPF (11 digitos)",
@@ -65,23 +94,11 @@ PADROES: list[tuple[str, re.Pattern[str], object]] = [
         and not (m.group().isdigit() and len(set(m.group())) == 1),
     ),
     (
-        "CNPJ (14 digitos)",
-        re.compile(r"(?<![\d.])\d{14}(?![\d.])"),
-        # CNPJ de supermercado E dado PUBLICO: aparece no cupom, no site
-        # da Receita, na fachada. Nao identifica pessoa fisica.
-        #
-        # Ainda assim o guard sinaliza, por decisao deliberada: num
-        # projeto pessoal o custo de revisar e zero, e o risco de
-        # versionar um CNPJ real de terceiro nao compensa. Trate como
-        # aviso, nao como bloqueio irreversivel.
-        lambda m: set(m.group()) != {"0"},
+        "CPF (formatado, com pontos e hifen)",
+        re.compile(r"(?<![\d.])\d{3}\.\d{3}\.\d{3}-\d{2}(?![\d.-])"),
+        lambda m: set(m.group().replace(".", "").replace("-", "")) != {"0"},
     ),
 ]
-
-# CNPJ acima epublico, mas o guard aceita uma constatacao explicita para
-# quem de fato precisa de um valor sintetico em teste. O nome do marcador
-# e longo de proposito: nao colide com um CNPJ copiado por engano.
-MARCADOR_CNPJ_SINTETICO = "-- cnpj-sintetico-ok"
 
 # Chaves de ambiente nao entram no guard: e o lugar LEGITIMO de um segredo.
 ARQUIVOS_PERMITIDOS_SENHA = {".env.example", ".gitignore"}
@@ -104,17 +121,8 @@ class Achado:
 
 def varrer_texto(nome: str, texto: str) -> list[Achado]:
     achados: list[Achado] = []
-    # Uma linha marcada como CNPJ sintetico nao e verificada. A marcacao
-    # e local e explicita: quem marca assume a responsabilidade, e o
-    # diff mostra a decisao na revisao de codigo.
-    linhas_confirmadas = {
-        i for i, l in enumerate(texto.splitlines(), start=1)
-        if MARCADOR_CNPJ_SINTETICO in l
-    }
     for num, linha in enumerate(texto.splitlines(), start=1):
         for regra, regex, e_falso_positivo in PADROES:
-            if "CNPJ" in regra and num in linhas_confirmadas:
-                continue
             for m in regex.finditer(linha):
                 if e_falso_positivo(m):
                     achados.append(Achado(nome, num, regra, m.group()))
@@ -181,7 +189,10 @@ def main() -> int:
         "  2. Substitua por um valor anonimo preservando o FORMATO\n"
         "     (ex.: chave de 44 digitos -> 44 zeros; CPF -> 11 zeros)\n"
         "  3. Se a forma anonima quebrar um teste, o teste esta verificando\n"
-        "     o dado em vez da logica. Corrija o teste."
+        "     o dado em vez da logica. Corrija o teste.\n"
+        "\n"
+        "  CNPJ de pessoa juridica NAO e sinalizado: e dado publico e\n"
+        "  sanitiza-lo nao protege ninguem. Ele nao pertence a esta lista."
     )
     return 1
 
