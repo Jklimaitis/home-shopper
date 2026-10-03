@@ -40,6 +40,28 @@ para aceita. Alterações de implementação e migrações precisam de escopo e 
 próprios. Se uma decisão aceita for substituída, preservar o registro e apontar a decisão
 sucessora.
 
+## Revisão de tabelas (2026-10-03)
+
+- [Regras aprovadas de stores, categories e presentations](reviews/2026-10-03-table-review.md)
+  com decisões incrementais de domínio; nenhum DDL ou dado foi alterado. As colunas finais
+  da apresentação e do mapeamento de origem continuam pendentes.
+- [Avaliação do recorte brasileiro do Open Food Facts](research/2026-10-03-openfoodfacts-brazil.md)
+  com síntese verificada, sem versionar o dump ou o recorte de produtos.
+
+A aprovação dessas regras não aceita automaticamente outros ADRs, PRDs ou planos locais.
+
+## Integrações externas em avaliação
+
+| Tema | Status | Condição para retomada |
+|---|---|---|
+| Enriquecimento de alimentos pela API do Open Food Facts | **On Hold** | Retomar apenas após nova decisão do usuário, considerando declaração de uso/autorização do fornecedor e condições da licença. |
+
+A integração não foi implementada. Enquanto estiver **On Hold**, não iniciar a integração,
+não enviar solicitação ao fornecedor e não realizar novas consultas de produtos pela API.
+Um dump JSONL local foi recebido e analisado; a avaliação offline não autoriza carga automática
+no catálogo nem resolve as condições de reutilização. Os artefatos de referência foram
+preservados localmente fora do Git; consulte a síntese acima.
+
 ## Lacunas conhecidas e registradas
 
 Estas estão documentadas nos ADRs e são candidatas a trabalho, não a esquecimento:
