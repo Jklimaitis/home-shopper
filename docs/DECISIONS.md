@@ -1,14 +1,14 @@
 # Decisões arquiteturais do home_shopper
 
 Este índice reúne registros de decisões arquiteturais (ADRs). Cada documento explica o
-contexto, as alternativas e as consequências de uma escolha relevante. **Status `draft` não
-significa que a decisão esteja aceita** — significa que o documento existe para revisão.
+contexto, as alternativas e as consequências de uma escolha relevante. **Status `draft`/`proposed`
+não significa que a decisão esteja aceita** — significa que o documento existe para revisão.
 
 ## Registros
 
 | Registro | Tema | Status |
 |---|---|---|
-| [ADR-0001](adr/0001-product-identity-and-presentations.md) | Identidade de produtos e apresentações | Proposta, aguardando revisão do documento |
+| [ADR-0001](adr/0001-product-identity-and-presentations.md) | Identidade de produtos e apresentações | **Aceita** (2026-10-01) — direção de domínio; critérios por categoria em [spec](../superpowers/specs/2026-10-01-product-equivalence-by-category.md) |
 | [ADR-0002](adr/0002-association-review-and-consolidation.md) | Associação de itens, revisão humana e consolidação | Proposta |
 | [ADR-0003](adr/0003-units-base-price-and-aggregation.md) | Unidades de comparação, base price e agregação de preços | Rascunho — implementada no código, ainda não revisada |
 | [ADR-0004](adr/0004-shared-catalogue-and-data-isolation.md) | Catálogo compartilhado e isolamento de dados de compra | Rascunho |
@@ -20,12 +20,12 @@ está documentado no [ERD](ERD.md).
 
 ## Leitura por estado, não por número
 
-Os registros 0003 a 0006 estão em `draft` e misturam três situações que valem caminhos de
-revisão diferentes:
+Os registros 0002 a 0006 misturam situações que valem caminhos de revisão diferentes:
 
 | Tipo | Registros | Significado |
 |---|---|---|
-| **Proposta** | 0001, 0002 | A direção foi discutida; o código pode não segui-la |
+| **Aceita** | 0001 | A direção foi revisada e aceita; o código ainda pode não segui-la |
+| **Proposta** | 0002 | A direção foi discutida; o código pode não segui-la |
 | **Registro retroativo** | 0003 | O schema **já** decide isto; o documento explica a decisão para revisão |
 | **Proposta com lacuna conhecida** | 0004, 0005, 0006 | Parte implementada, parte propositalmente aberta |
 
@@ -75,6 +75,9 @@ Estas estão documentadas nos ADRs e são candidatas a trabalho, não a esquecim
 4. **Os mapeamentos de unidade não se propagam entre emissores.** Uma filial nova do mesmo
    Supermarket G exigiu revisão separada, corretamente. → ADR-0003
 5. **`audit_log` retém JSONB e não tem política de expurgo.** → ADR-0005
+6. **O peso drenado é um caso nomeado, não uma classe.** `ERVILHA 1KG` ≠ `ERVILHA 800G`, e nada
+   mais: as demais conservas com peso declarado diferente caem na regra de apresentação. Como
+   representar esse caso sem criar uma classe artificial ainda está aberto. → ADR-0001
 
 ## Próximos temas para discussão
 
