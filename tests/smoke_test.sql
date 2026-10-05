@@ -151,10 +151,10 @@ END $$;
 -- A3: consolidate into the trusted layer
 -- -----------------------------------------------------------------------------
 INSERT INTO purchase_notes (user_id, store_id, staging_receipt_id, access_key,
-                            purchase_date, amount_paid, payment_method)
+                            purchase_date, amount_paid)
     SELECT user_id, store_id, id,
            '00000000000000000000000000000000000000000000',
-           DATE '2026-07-10', amount_paid, 'Credit card'
+           DATE '2026-07-10', amount_paid
       FROM staging_receipts;
 
 INSERT INTO line_items (note_id, product_id, presentation_id, line_no,
@@ -482,6 +482,113 @@ SELECT 'N1' AS test,
              AND (SELECT count(*) FROM information_schema.columns
                    WHERE table_name='products' AND column_name='ean') = 0
              AND (SELECT count(*) FROM pg_constraint WHERE conname='uk_presentations_form') = 1
+            THEN 'PASS' ELSE 'FAIL' END AS result;
+
+-- -----------------------------------------------------------------------------
+-- N2: purchase_notes is immutable, except the staging link (internal task, C2)
+-- -----------------------------------------------------------------------------
+-- The design was decided before but never exercised: an earlier probe ran
+-- against an EMPTY table (this file ends in ROLLBACK) and reported "not
+-- blocked", which proves nothing. This block uses real rows and runs LAST,
+-- before ROLLBACK, so its fixtures do not disturb the audit counts above.
+\echo ''
+\echo '--- N2: purchase_notes immutability (C2) ---'
+DO $$
+DECLARE
+    v_user   UUID;
+    v_store  UUID;
+    v_stage  UUID;
+    v_stage2 UUID;
+    v_note   UUID;
+    v_link   UUID;
+    v_tmp    BOOLEAN;
+    v_pass   BOOLEAN := true;
+BEGIN
+    SELECT id INTO v_store FROM stores LIMIT 1;
+    INSERT INTO users (name, email) VALUES ('Immutability Test', 'c2@example.com')
+        RETURNING id INTO v_user;
+
+    -- A receipt in staging and a consolidated note linked to it.
+    INSERT INTO staging_receipts (user_id, source, total_gross, discount_total, amount_paid)
+        VALUES (v_user, 'MANUAL', 10.00, 0.00, 10.00)
+        RETURNING id INTO v_stage;
+    INSERT INTO purchase_notes (user_id, store_id, staging_receipt_id,
+                                purchase_date, amount_paid)
+        VALUES (v_user, v_store, v_stage, CURRENT_DATE, 10.00)
+        RETURNING id INTO v_note;
+
+    -- 1) a change to any column other than the link is refused
+    v_tmp := false;
+    BEGIN
+        UPDATE purchase_notes SET amount_paid = amount_paid + 1 WHERE id = v_note;
+    EXCEPTION WHEN check_violation THEN v_tmp := true;
+    END;
+    RAISE NOTICE 'N2 other-column update refused    : %',
+        CASE WHEN v_tmp THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_tmp;
+
+    -- 2) changing the link itself is allowed
+    v_tmp := false;
+    BEGIN
+        UPDATE purchase_notes SET staging_receipt_id = NULL WHERE id = v_note;
+        v_tmp := true;
+    EXCEPTION WHEN others THEN v_tmp := false;
+    END;
+    RAISE NOTICE 'N2 staging-link change allowed    : %',
+        CASE WHEN v_tmp THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_tmp;
+
+    -- 3) deleting a staging_receipt whose note points at it concludes via
+    --    ON DELETE SET NULL -- it does not abort on the immutability trigger.
+    UPDATE purchase_notes SET staging_receipt_id = v_stage WHERE id = v_note;
+    v_tmp := false;
+    BEGIN
+        DELETE FROM staging_receipts WHERE id = v_stage;
+        SELECT staging_receipt_id INTO v_link FROM purchase_notes WHERE id = v_note;
+        v_tmp := v_link IS NULL;
+    EXCEPTION WHEN others THEN v_tmp := false;
+    END;
+    RAISE NOTICE 'N2 staging delete clears the link: %',
+        CASE WHEN v_tmp THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_tmp;
+
+    -- 4) the LGPD path still concludes on a LINKED note: audit_log has no FK
+    --    back to users, so deleting the person removes the note and keeps the
+    --    trail.
+    INSERT INTO staging_receipts (user_id, source, total_gross, discount_total, amount_paid)
+        VALUES (v_user, 'MANUAL', 10.00, 0.00, 10.00)
+        RETURNING id INTO v_stage2;
+    UPDATE purchase_notes SET staging_receipt_id = v_stage2 WHERE id = v_note;
+    v_tmp := false;
+    BEGIN
+        DELETE FROM users WHERE id = v_user;
+        v_tmp := NOT EXISTS (SELECT 1 FROM purchase_notes WHERE id = v_note)
+             AND EXISTS (SELECT 1 FROM audit_log WHERE record_id = v_note);
+    EXCEPTION WHEN others THEN v_tmp := false;
+    END;
+    RAISE NOTICE 'N2 LGPD delete keeps the trail : %',
+        CASE WHEN v_tmp THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_tmp;
+
+    IF v_pass THEN
+        RAISE NOTICE 'N2 RESULT: PASS (immutable, staging link excepted)';
+    ELSE
+        RAISE NOTICE 'N2 RESULT: FAIL';
+    END IF;
+END $$;
+
+SELECT 'N2' AS test,
+       (SELECT count(*) FROM information_schema.columns
+         WHERE table_name='purchase_notes' AND column_name='payment_method') AS payment_method_cols,
+       (SELECT count(*) FROM pg_trigger
+         WHERE tgrelid='purchase_notes'::regclass
+           AND tgname='tr_purchase_notes_immutable') AS immutable_trigger,
+       CASE WHEN (SELECT count(*) FROM information_schema.columns
+                   WHERE table_name='purchase_notes'
+                     AND column_name='payment_method') = 0
+             AND (SELECT count(*) FROM pg_trigger
+                   WHERE tgrelid='purchase_notes'::regclass
+                     AND tgname='tr_purchase_notes_immutable') = 1
             THEN 'PASS' ELSE 'FAIL' END AS result;
 
 ROLLBACK;

@@ -122,7 +122,6 @@ CREATE TABLE purchase_notes (
     access_key      TEXT,
     purchase_date   DATE        NOT NULL,
     amount_paid     NUMERIC(12,2) NOT NULL,
-    payment_method  TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
 
     CONSTRAINT pk_purchase_notes PRIMARY KEY (id),

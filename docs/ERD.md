@@ -112,7 +112,6 @@ erDiagram
         text      access_key "partial unique: idempotency"
         date      purchase_date
         numeric   amount_paid
-        text      payment_method
         timestamptz created_at
     }
 

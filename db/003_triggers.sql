@@ -162,4 +162,38 @@ CREATE TRIGGER tr_line_items_audit
     AFTER INSERT OR UPDATE OR DELETE ON line_items
     FOR EACH ROW EXECUTE FUNCTION write_audit_entry();
 
+-- -----------------------------------------------------------------------------
+-- Trusted layer: purchase_notes is immutable, except for the staging link (C2)
+-- -----------------------------------------------------------------------------
+-- A consolidated note is the reviewed layer. Rewriting it would change history
+-- behind the audit trail's back, so any column change is refused.
+--
+-- ONE exception: the staging link. fk_purchase_notes_staging is
+-- ON DELETE SET NULL, and clearing that link IS an UPDATE on this table.
+-- Refusing every UPDATE would make deleting a staging_receipt impossible --
+-- the same shape of bug an FK on audit_log.user_id once created on the LGPD
+-- erasure path (see the LGPD test).
+--
+-- The comparison goes through to_jsonb() minus the link, so a column added to
+-- purchase_notes later is protected without editing this function.
+CREATE OR REPLACE FUNCTION reject_purchase_notes_mutation() RETURNS TRIGGER AS $$
+BEGIN
+    IF to_jsonb(NEW) - 'staging_receipt_id'
+       IS DISTINCT FROM
+       to_jsonb(OLD) - 'staging_receipt_id'
+    THEN
+        RAISE EXCEPTION
+            'purchase_notes is immutable apart from the staging link: delete '
+            'the note and enter it again instead of rewriting it (note id=%)',
+            OLD.id
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER tr_purchase_notes_immutable
+    BEFORE UPDATE ON purchase_notes
+    FOR EACH ROW EXECUTE FUNCTION reject_purchase_notes_mutation();
+
 COMMIT;
