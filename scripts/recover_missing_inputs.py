@@ -24,6 +24,21 @@ preserved input:
   * a note without a key is covered when an input JSON has the same
     ``(issuer_cnpj, purchase_date)`` pair.
 
+Where the wording of a line is read from depends on the schema of the source
+database, and the tool picks the right one at run time:
+
+  * pre-005 schema (the ad-hoc base ``home_shopper``, the historical source):
+    ``presentations`` still carried ``description_raw`` and ``sale_unit``
+    verbatim. The item query reaches them through the row itself
+    (``to_jsonb(pr)``), so it never *names* a column the current schema dropped.
+  * form/mapping schema (``db/005_presentations_form_model.sql``, the canonical
+    base): the wording lives in ``presentation_sources``, one row per
+    (store, wording). The item query reads it from there, scoped to the store of
+    the note. A form carrying more than one wording in the SAME store is a
+    degraded case: the oldest mapping wins and the caller must review what came
+    back -- the reconstruction is an approximation of the line wording, not a
+    copy of it.
+
 Usage (source = the ad-hoc base, inputs = the preserved audit dir)
 ------------------------------------------------------------------
     python3 scripts/recover_missing_inputs.py \\
@@ -47,19 +62,48 @@ import subprocess
 import sys
 from typing import Any
 
-ITEM_JSON = """
+# The wording of a line lives in `presentations` on the pre-005 schema and in
+# `presentation_sources` on the form/mapping schema. Two queries, chosen at run
+# time by probing `to_regclass`; neither names a column that the schema it
+# targets does not have.
+ITEM_JSON_LEGACY = """
 SELECT coalesce(json_agg(item ORDER BY item->>'line_no'), '[]'::json)
 FROM (
     SELECT json_build_object(
                'line_no',       li.line_no,
-               'description_raw', pr.description_raw,
-               'sale_unit',     pr.sale_unit,
+               'description_raw', to_jsonb(pr)->>'description_raw',
+               'sale_unit',     to_jsonb(pr)->>'sale_unit',
                'quantity',      trim_scale(li.quantity)::text,
                'unit_price',    trim_scale(li.unit_price)::text,
                'line_total',    trim_scale(li.line_total)::text
            ) AS item
     FROM line_items li
     JOIN presentations pr ON pr.id = li.presentation_id
+    WHERE li.note_id = %(note_id)s
+) t
+"""
+
+ITEM_JSON_FORM_MODEL = """
+SELECT coalesce(json_agg(item ORDER BY item->>'line_no'), '[]'::json)
+FROM (
+    SELECT json_build_object(
+               'line_no',       li.line_no,
+               'description_raw', ps.description_raw,
+               'sale_unit',     ps.sale_unit,
+               'quantity',      trim_scale(li.quantity)::text,
+               'unit_price',    trim_scale(li.unit_price)::text,
+               'line_total',    trim_scale(li.line_total)::text
+           ) AS item
+    FROM line_items li
+    JOIN purchase_notes pn ON pn.id = li.note_id
+    LEFT JOIN LATERAL (
+        SELECT s.description_raw, s.sale_unit
+          FROM presentation_sources s
+         WHERE s.presentation_id = li.presentation_id
+           AND s.store_id = pn.store_id
+         ORDER BY s.created_at, s.id
+         LIMIT 1
+    ) ps ON true
     WHERE li.note_id = %(note_id)s
 ) t
 """
@@ -98,6 +142,13 @@ def psql_json(container: str, user: str, db: str, sql: str) -> Any:
         raise RuntimeError(f"psql failed: {proc.stderr.strip()}")
     payload = proc.stdout.strip() or "null"
     return json.loads(payload)
+
+
+def uses_form_model(container: str, user: str, db: str) -> bool:
+    """True when the source database carries the form/mapping schema (db/005)."""
+    return bool(psql_json(
+        container, user, db,
+        "SELECT to_json(to_regclass('public.presentation_sources') IS NOT NULL)"))
 
 
 def covered_keys(have_dir: str) -> tuple[set[str], set[tuple[str, str]]]:
@@ -164,13 +215,18 @@ def main() -> int:
     print(f"# source notes: {len(notes)}; missing from inputs: {len(missing)}",
           file=sys.stderr)
 
+    form_model = uses_form_model(args.source_container, args.source_user, args.source_db)
+    item_sql = ITEM_JSON_FORM_MODEL if form_model else ITEM_JSON_LEGACY
+    print(f"# source schema: {'form/mapping (db/005)' if form_model else 'legacy presentations'}",
+          file=sys.stderr)
+
     if args.write and missing:
         os.makedirs(args.out_dir, exist_ok=True)
 
     total_lines = 0
     for note in missing:
         items = psql_json(args.source_container, args.source_user, args.source_db,
-                          ITEM_JSON.replace("%(note_id)s", f"'{note['note_id']}'::uuid"))
+                          item_sql.replace("%(note_id)s", f"'{note['note_id']}'::uuid"))
         total_lines += len(items)
         payload = {
             "access_key": note.get("access_key"),
