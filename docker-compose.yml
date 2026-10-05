@@ -12,7 +12,7 @@
 # postgres:16-alpine, base/usuario `home_shopper`.
 #
 # Credenciais vem do `.env` (modelo em `.env.example`); nenhum segredo aqui.
-#   cp .env.example .env      # e edite DB_PASSWORD
+#   python3 scripts/prepare_env.py    # cria o .env; depois edite DB_PASSWORD
 # =============================================================================
 
 services:

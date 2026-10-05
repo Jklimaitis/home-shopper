@@ -75,12 +75,39 @@ prefix.
 
 ## Run it
 
-Prerequisites: Docker with Compose and the `psql` client
-(`postgresql-client`). The credentials come from `.env` — copy the model once
-and set a real `DB_PASSWORD`:
+Prerequisites: Docker with Compose. A host `psql` client is used for one of the
+two schema loops below, but the container path works without it.
+
+**1. Prepare the environment.** A worktree starts with no `.env`, and Compose
+refuses to start without `DB_PASSWORD`. One command creates `.env` byte for byte
+from the versioned model. It never touches an existing `.env`, never reads or
+copies another worktree's `.env`, refuses a tracked/ungitignored/symlinked
+`.env`, and never prints a variable's value:
 
 ```bash
-cp .env.example .env
+python3 scripts/prepare_env.py            # create .env from .env.example
+python3 scripts/prepare_env.py --check    # report only; writes nothing
+```
+
+Exit codes: `0` ready · `1` `.env` in place but `DB_PASSWORD` is still unset or
+at the model value (human action pending) · `2` environment error (not a git
+worktree, `.env` tracked or not ignored, `.env` a symlink, `.env.example`
+missing).
+
+**2. Set a real `DB_PASSWORD`.** Generate one, then edit `.env` and replace the
+value — never paste a secret into a card, log or chat (see *Personal data*):
+
+```bash
+openssl rand -base64 32        # paste the output into .env: DB_PASSWORD=<value>
+```
+
+Re-run `python3 scripts/prepare_env.py` and confirm `DB_PASSWORD ok` followed by
+`STATUS: pronto -- exit 0`. `SECRET_KEY` and `SEFAZ_CSC_POR_LOJA` stay listed as
+pending; they are required only by later phases (API, NFC-e ingest).
+
+**3. Start the server and apply the schema.**
+
+```bash
 docker compose up -d
 for f in db/*.sql; do
   psql -h localhost -U home_shopper -d home_shopper -v ON_ERROR_STOP=1 -f "$f"
@@ -98,6 +125,31 @@ for f in db/*.sql; do
   docker compose exec -T db psql -U home_shopper -d home_shopper -v ON_ERROR_STOP=1 < "$f"
 done
 ```
+
+`docker compose exec` interpolates `docker-compose.yml` too, so it must run from
+the worktree whose Compose project is up — that directory's `.env` supplies
+`DB_PASSWORD`. From a directory without `.env` it fails with
+`required variable DB_PASSWORD is missing a value`.
+
+> **`docker exec` on a running container is a workaround, not a substitute.**
+> If the canonical `home_shopper` project is already up, this reaches that
+> server from anywhere without starting a second one:
+>
+> ```bash
+> docker exec -i home_shopper-db psql -U home_shopper -d home_shopper -v ON_ERROR_STOP=1 < db/001_schema.sql
+> ```
+>
+> It executes **inside the already-running container**; it does not prepare a
+> worktree's `.env`, and it talks to that container's database — not to the
+> worktree's own `pgdata` volume. The container name (`home_shopper-db`) is
+> fixed in `docker-compose.yml`, while the user and database (`-U`, `-d`) come
+> from `.env`; both are environment-dependent, so confirm them with `docker ps`
+> before relying on them. Because the container name is fixed, a worktree's
+> Compose project **cannot be up at the same time** as the canonical container —
+> both want to create `home_shopper-db`. The worktree's own
+> `docker compose exec -T db …` then answers `service "db" is not running`. Do
+> not remove the canonical container to make room; stop it deliberately if you
+> need the worktree's own database.
 
 ### Load the test data
 

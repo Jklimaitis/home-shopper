@@ -13,6 +13,7 @@ import contextlib
 import hashlib
 import io
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -169,6 +170,76 @@ class Recusas(BaseWorktree):
         codigo, _, err = rodar(self.repo / "nao-existe")
         self.assertEqual(codigo, 2)
         self.assertIn("nao existe", err)
+
+
+class SenhaObrigatoria(BaseWorktree):
+    """O caso "senha obrigatoria nao configurada": vazia ou no valor do modelo."""
+
+    def test_senha_vazia_conta_como_pendente(self):
+        self.env().write_text("DB_PASSWORD=\n", encoding="utf-8")
+        antes = sha256(self.env())
+        codigo, out, _ = rodar(self.repo)
+        self.assertEqual(codigo, 1, "senha vazia nao configura o ambiente")
+        self.assertIn("PENDENTE", out)
+        self.assertIn("openssl rand -base64 32", out)
+        self.assertEqual(sha256(self.env()), antes, ".env existente nao pode mudar")
+
+    def test_valor_do_modelo_conta_como_pendente(self):
+        codigo, _, _ = rodar(self.repo)  # cria a partir do modelo
+        self.assertEqual(codigo, 1)
+        codigo, out, _ = rodar(self.repo)  # segunda execucao: valor do modelo
+        self.assertEqual(codigo, 1)
+        self.assertIn("DB_PASSWORD", out)
+        self.assertIn("PENDENTE", out)
+
+
+@unittest.skipUnless(shutil.which("docker"), "docker nao disponivel")
+class ComposeReal(unittest.TestCase):
+    """Integracao: o `docker-compose.yml` real resolve a partir do .env.
+
+    Nao sobe container, nao toca em `.env` e nao exige segredo real -- a senha
+    entra pelo ambiente do subprocesso. Verifica o contrato que o README
+    documenta (sem ela o `config` falha; com ela resolve).
+    """
+
+    COMPOSE = REPO / "docker-compose.yml"
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory(prefix="compose_config_")
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def config(self, com_senha: bool) -> subprocess.CompletedProcess:
+        env = dict(os.environ)
+        env.pop("DB_PASSWORD", None)
+        if com_senha:
+            env["DB_PASSWORD"] = SENHA_REAL
+        return subprocess.run(
+            [
+                "docker", "compose", "-f", str(self.COMPOSE),
+                "--project-directory", self._tmp.name, "config", "--quiet",
+            ],
+            capture_output=True, text=True, env=env, timeout=60,
+        )
+
+    def test_falha_sem_db_password(self):
+        r = self.config(com_senha=False)
+        self.assertNotEqual(r.returncode, 0, "compose nao pode resolver sem DB_PASSWORD")
+        self.assertIn("DB_PASSWORD", r.stderr)
+
+    def test_resolve_com_db_password(self):
+        r = self.config(com_senha=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn(SENHA_REAL, r.stdout + r.stderr, "valor nunca e impresso")
+
+    def test_container_name_fixo_esta_documentado(self):
+        texto = self.COMPOSE.read_text(encoding="utf-8")
+        self.assertIn(
+            "container_name: home_shopper-db", texto,
+            "o README depende deste nome fixo; se mudar, atualize a nota de colisao",
+        )
+
 
 
 if __name__ == "__main__":
