@@ -48,8 +48,9 @@ def synthetic_note(items: list[dict]) -> dict:
     }
 
 
-def synthetic_item(line_no: int, description: str, sale_unit: str = "UN") -> dict:
-    return {
+def synthetic_item(line_no: int, description: str, sale_unit: str = "UN",
+                   observed_code: str | None = None) -> dict:
+    item = {
         "line_no": line_no,
         "description_raw": description,
         "sale_unit": sale_unit,
@@ -57,6 +58,9 @@ def synthetic_item(line_no: int, description: str, sale_unit: str = "UN") -> dic
         "unit_price": "10.00",
         "line_total": "10.00",
     }
+    if observed_code is not None:
+        item["observed_code"] = observed_code
+    return item
 
 
 class TestNormalizeAndUnits(unittest.TestCase):
@@ -110,6 +114,41 @@ class TestMultipack(unittest.TestCase):
             self.assertEqual(load_receipts.extract_multipack(hint), (None, None))
 
 
+class TestGtinValidation(unittest.TestCase):
+    """A code enters `presentation_identifiers` only when it is a REAL GTIN."""
+
+    def test_accepts_valid_gtin8_gtin12_gtin13(self):
+        for code in ("7891000412855", "7891203010056", "618231517695",
+                     "96385074"):
+            with self.subTest(code=code):
+                self.assertEqual(load_receipts.classify_observed_code(code),
+                                 (code, None))
+
+    def test_short_and_non_numeric_codes_are_reading_noise(self):
+        # 1-7 digits are the fragments an emitter prints; never a GTIN, and
+        # never completed into one.
+        for raw in ("504", "5984", "1339812", "", "ABC123", "12 34"):
+            with self.subTest(raw=raw):
+                self.assertEqual(load_receipts.classify_observed_code(raw),
+                                 (None, "short_or_malformed"))
+
+    def test_a_length_no_gtin_has_is_rejected(self):
+        # 11 digits passes the DDL CHECK but is not a GTIN length. The value is
+        # anonymised (eleven zeros): a real 11-digit emitter code reads as a
+        # CPF to the guard, and the test must pin the LENGTH, not the digits.
+        self.assertEqual(load_receipts.classify_observed_code("00000000000"),
+                         (None, "invalid_length"))
+
+    def test_a_wrong_check_digit_is_rejected_not_repaired(self):
+        # 7891000412855 is valid; the trailing 4 is a misread, not a value to fix.
+        self.assertEqual(load_receipts.classify_observed_code("7891000412854"),
+                         (None, "check_digit"))
+
+    def test_whitespace_is_stripped_but_digits_are_untouched(self):
+        self.assertEqual(load_receipts.classify_observed_code(" 7891000412855 "),
+                         ("7891000412855", None))
+
+
 class TestNoteFields(unittest.TestCase):
     def test_iso_date_accepts_both_formats(self):
         self.assertEqual(load_receipts.iso_date({"emission": "05/10/2026 13:22:00"}),
@@ -141,7 +180,8 @@ class TestEmittedSql(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         note = synthetic_note([
-            synthetic_item(1, "CARNE MOIDA 1KG", "Kg"),
+            synthetic_item(1, "CARNE MOIDA 1KG", "Kg",
+                           observed_code="7891000412855"),
             synthetic_item(2, "REFRIG 2X500G", "UN"),
             synthetic_item(3, "PAPEL C/12", "UN"),
             synthetic_item(4, "SAL grosso", "BJ"),
@@ -189,6 +229,44 @@ class TestEmittedSql(unittest.TestCase):
 
     def test_content_is_left_unknown(self):
         self.assertIn("'UNKNOWN', NULL, NULL", self.sql)
+
+    def test_valid_gtin_is_written_to_presentation_identifiers(self):
+        self.assertIn("INSERT INTO presentation_identifiers", self.sql)
+        self.assertIn("'7891000412855'", self.sql)
+        self.assertIn("uk_presentation_identifiers_gtin", self.sql)
+        # One row per distinct GTIN; the section carries the provenance.
+        self.assertIn("-- 7891000412855 from synthetic_note line 1", self.sql)
+        self.assertIn("GTIN observed: 1 line(s) accepted -> 1 distinct GTIN",
+                      self.summary)
+
+    def test_no_observed_code_means_no_identifier_section(self):
+        # The other three lines have no `observed_code`: they must never
+        # produce an identifier row.
+        self.assertEqual(self.sql.count("INSERT INTO presentation_identifiers"), 1)
+
+
+class TestGtinConflict(unittest.TestCase):
+    """A GTIN that would point at two forms is refused, never silently kept."""
+
+    def test_same_gtin_on_two_forms_raises(self):
+        note = synthetic_note([
+            synthetic_item(1, "CARNE MOIDA 1KG", "Kg",
+                           observed_code="7891000412855"),
+            synthetic_item(2, "ARROZ TIO JOAO 5KG", "UN",
+                           observed_code="7891000412855"),
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "note.json"
+            path.write_text(json.dumps([note]), encoding="utf-8")
+            args = load_receipts.argparse.Namespace(
+                user_id="00000000-0000-0000-0000-0000000000bb",
+                user_name="Teste", user_email="teste@example.com",
+                transaction=True, dry_run=False,
+            )
+            notes = load_receipts.load_notes(Path(tmp))
+            with contextlib.redirect_stderr(io.StringIO()), \
+                    self.assertRaises(ValueError):
+                load_receipts.emit(notes, args)
 
 
 if __name__ == "__main__":

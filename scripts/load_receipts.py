@@ -17,8 +17,9 @@ The loader writes the FORM / MAPPING model introduced by
   * `presentation_sources` is the per-store MAPPING -- the wording and the sale
     unit exactly as the store printed them. It is created or reused by
     `uk_presentation_sources_store_key` = `(store_id, match_key)`.
-  * the GTIN lives in `presentation_identifiers` (J2). This loader does not
-    write it -- see "What the loader deliberately does NOT write".
+  * the GTIN lives in `presentation_identifiers` (J2). The loader validates the
+    `observed_code` (format, GTIN length, GS1 check digit) and writes only what
+    passes -- see "The observed GTIN" below.
 
 Writing to the old model (a `presentations` row carrying `sale_unit`,
 `description_raw`, `description_norm`, `store_id` and `ON CONFLICT
@@ -35,8 +36,8 @@ Input  -- a directory of receipt JSON files, in the format preserved under
           (or `amount_payable`), `items[]`.
           Item fields used: `line_no`, `description_raw`, `sale_unit`,
           `quantity`, `unit_price`, `line_total`.
-          The preserved inputs also carry `observed_code`; it is deliberately
-          not read here (see below).
+          The preserved inputs also carry `observed_code` (the item's barcode as
+          printed). It is read and validated -- see "The observed GTIN".
 
 Output -- SQL on stdout, applied with the same client the README documents:
 
@@ -60,6 +61,9 @@ What the loader writes, per line item
    verbatim, `description_search` the ONE derived search representation
    (Ponto C). Created or reused by `(store_id, match_key)`.
 4. the CHARGE in `line_items`.
+5. the GTIN, when the line carries a VALID `observed_code`, in
+   `presentation_identifiers` -- one row per distinct GTIN (see "The observed
+   GTIN").
 
 Sale unit
 ---------
@@ -77,11 +81,33 @@ filled only when the description itself states a container word. `c/N` (`C/12`)
 and `Nun` (`12UN`) are pack hints the loader cannot confirm: both are left NULL
 and go to review. Nothing is inferred by default.
 
+The observed GTIN (J2)
+----------------------
+`observed_code` is the barcode the receipt prints for the line. It is noisy
+(short fragments, emitter store codes), so the loader writes a GTIN ONLY when
+the code is a real one:
+
+  * the format the CHECK approves, `^[0-9]{8,14}$`;
+  * a length a GTIN actually has -- 8, 12, 13 or 14. A code of 9/10/11 digits
+    is not a GTIN no matter which digits it holds;
+  * the GS1 mod-10 check digit is correct.
+
+Anything else is rejected -- never padded, completed or guessed -- and the raw
+value stays in the private source for audit. Every rejection is counted in the
+loader summary by reason: short/malformed, invalid length, wrong check digit.
+
+A valid GTIN is written to `presentation_identifiers`, tied to the form the
+line derives. The association is resolved AFTER every form is created, by the
+same tuple the line used, so the section loads both on a fresh base and on one
+already loaded (where the note insert is skipped). One row per distinct GTIN
+(`uk_presentation_identifiers_gtin`); a code observed on several lines yields
+one row and the surplus is reported as duplicates. The table has no
+`reviewed`/provenance column -- the link is mechanical by construction -- so
+the provenance (note label, line number) is carried in the generated SQL
+comments rather than in a column that does not exist.
+
 What the loader deliberately does NOT write
 -------------------------------------------
-* `presentation_identifiers`. Loading the observed GTIN would require checking
-  the check digit at load/review time, which is not this loader's job; the
-  canonical base has 0 identifier rows and this loader keeps it that way.
 * `match_source` / `reviewed` on the mapping. The link the loader derives is
   mechanical, not confirmed by a human: `reviewed` keeps its FALSE default and
   `match_source` stays NULL, exactly as the migration left them.
@@ -155,6 +181,44 @@ N_UN_RE = re.compile(r"\b\d{1,3}\s*un\b", re.IGNORECASE)
 CONTAINER_WORDS = {
     "cx": "cx", "pc": "pc", "pct": "pct", "sc": "sc", "lt": "lt", "un": "un",
 }
+
+# GTIN: the observed barcode. The DDL CHECK accepts `^[0-9]{8,14}$`, but a regex
+# cannot see that 9/10/11 digits is not a GTIN, nor that a digit was misread --
+# the check digit is a second, independent gate.
+GTIN_RE = re.compile(r"^[0-9]{8,14}$")
+# The lengths GS1 defines for a GTIN. A code of another length is not one.
+GTIN_LENGTHS = (8, 12, 13, 14)
+
+
+def gtin_check_digit_ok(code: str) -> bool:
+    """GS1 mod-10 check digit, valid for GTIN-8/12/13/14.
+
+    Weights 3,1 alternate from the digit LEFT of the check digit. The digit is
+    verified, never inferred: a wrong check digit is a misread, not a value to
+    repair.
+    """
+    body, check = code[:-1], int(code[-1])
+    total = sum((3 if i % 2 == 0 else 1) * int(digit)
+                for i, digit in enumerate(reversed(body)))
+    return (10 - total % 10) % 10 == check
+
+
+def classify_observed_code(raw) -> tuple[str | None, str | None]:
+    """`(gtin, None)` when `raw` is a valid GTIN, else `(None, reason)`.
+
+    Reasons: `short_or_malformed` (fewer than 8 digits or non-numeric --
+    reading noise), `invalid_length` (a digit count no GTIN has, e.g. 11),
+    `check_digit` (the GS1 mod-10 digit fails). The raw value is never modified:
+    nothing is padded, completed or guessed.
+    """
+    code = str(raw).strip()
+    if not GTIN_RE.match(code):
+        return None, "short_or_malformed"
+    if len(code) not in GTIN_LENGTHS:
+        return None, "invalid_length"
+    if not gtin_check_digit_ok(code):
+        return None, "check_digit"
+    return code, None
 
 
 def normalize_text(text: str) -> str:
@@ -308,6 +372,14 @@ def emit(notes: list[dict], args: argparse.Namespace) -> list[str]:
     unrecognized_units: Counter = Counter()
     confirmed_packs: list[tuple[str, str, int, str | None]] = []
     pending_packs: list[tuple[str, str, str]] = []
+    # GTIN (J2): the observed code, validated, then written to
+    # presentation_identifiers once every form exists.
+    gtin_rejections: Counter = Counter()
+    gtin_accepted_lines = 0
+    gtin_form_of: dict[str, tuple] = {}
+    gtin_provenance: dict[str, list[tuple[str, int]]] = {}
+    gtin_by_form: dict[tuple, list[str]] = {}
+    gtin_conflicts: list[tuple[str, ...]] = []
 
     for note in notes:
         cnpj = only_digits(note.get("issuer_cnpj"))
@@ -395,6 +467,29 @@ def emit(notes: list[dict], args: argparse.Namespace) -> list[str]:
                 hint = pack_hint(desc_search)
                 if hint is not None:
                     pending_packs.append((label, desc_search, hint))
+            # The GTIN, when the line declares one: validated here, emitted
+            # after every form exists (see the identifier section below).
+            raw_code = item.get("observed_code")
+            if raw_code not in (None, ""):
+                gtin, reject = classify_observed_code(raw_code)
+                if gtin is None:
+                    gtin_rejections[reject] += 1
+                else:
+                    gtin_accepted_lines += 1
+                    form_key = (desc_search, recognized, container, multipack)
+                    known = gtin_form_of.get(gtin)
+                    if known is None:
+                        gtin_form_of[gtin] = form_key
+                        gtin_by_form.setdefault(form_key, []).append(gtin)
+                    elif known != form_key:
+                        # One GTIN identifies ONE commercial item
+                        # (`uk_presentation_identifiers_gtin`): a code that
+                        # points at two forms is a real conflict and cannot be
+                        # stored -- refuse rather than silently pick one.
+                        gtin_conflicts.append((gtin, known[0], form_key[0]))
+                    gtin_provenance.setdefault(gtin, []).append(
+                        (label, int(item["line_no"]))
+                    )
             pack_sql = "NULL" if multipack is None else str(multipack)
             out.append(
                 "        INSERT INTO products (name, base_unit)\n"
@@ -430,6 +525,74 @@ def emit(notes: list[dict], args: argparse.Namespace) -> list[str]:
             )
         out.append("    END IF;\nEND $$;")
 
+    # -------------------------------------------------------------------------
+    # presentation_identifiers -- the observed GTINs (J2)
+    # -------------------------------------------------------------------------
+    # Emitted LAST, so every form the lines created already exists. That also
+    # makes the section load onto a base whose notes were already imported: the
+    # note insert is skipped, but the form remains and the GTIN still lands.
+    if gtin_conflicts:
+        detail = "; ".join(
+            f"{gtin} -> {form_a!r} vs {form_b!r}"
+            for gtin, form_a, form_b in gtin_conflicts
+        )
+        raise ValueError(
+            "observed GTIN maps to more than one form, which "
+            f"uk_presentation_identifiers_gtin cannot hold: {detail}"
+        )
+
+    if gtin_by_form:
+        out.append(
+            "-- ---------------------------------------------------------------------------\n"
+            "-- presentation_identifiers -- observed GTINs (J2)\n"
+            "--\n"
+            "-- Only codes that are a REAL GTIN: format `^[0-9]{8,14}$` AND a GTIN length\n"
+            "-- (8/12/13/14) AND a correct GS1 mod-10 check digit. Nothing is padded,\n"
+            "-- completed or inferred; a code that fails stays only in the private source.\n"
+            "-- Each is tied to the form its line derived, resolved by the same tuple, so\n"
+            "-- this section also loads onto an already-loaded base. One row per distinct\n"
+            "-- GTIN (`uk_presentation_identifiers_gtin`); provenance (note, line) is in the\n"
+            "-- comment above each value."
+        )
+    for form_key, gtins in sorted(gtin_by_form.items(), key=lambda kv: kv[0][0]):
+        desc_search, recognized, container, multipack = form_key
+        pack_sql = "NULL" if multipack is None else str(multipack)
+        block = [
+            "DO $$",
+            "DECLARE",
+            "    v_presentation_id UUID;",
+            "BEGIN",
+            "    SELECT pr.id INTO v_presentation_id",
+            "      FROM presentations pr",
+            "      JOIN products p ON p.id = pr.product_id",
+            f"     WHERE p.name = {sql_literal(desc_search)} AND p.brand IS NULL",
+            f"       AND pr.sale_unit_recognized IS NOT DISTINCT FROM {sql_literal(recognized)}",
+            "       AND pr.content_kind = 'UNKNOWN'",
+            "       AND pr.content_quantity IS NULL AND pr.content_unit IS NULL",
+            f"       AND pr.container_type IS NOT DISTINCT FROM {sql_literal(container)}",
+            f"       AND pr.multipack_quantity IS NOT DISTINCT FROM {pack_sql};",
+            "    IF v_presentation_id IS NULL THEN",
+            "        RAISE NOTICE 'gtin section: no form for %; nothing loaded', "
+            f"{sql_literal(desc_search)};",
+            "    ELSE",
+        ]
+        for gtin in sorted(gtins):
+            provenance = ", ".join(
+                f"{lab} line {ln}" for lab, ln in gtin_provenance.get(gtin, [])
+            )
+            block.append(f"        -- {gtin} from {provenance}")
+        block += [
+            "        INSERT INTO presentation_identifiers (presentation_id, gtin) VALUES",
+            ",\n".join(
+                f"            (v_presentation_id, {sql_literal(g)})"
+                for g in sorted(gtins)
+            ),
+            "        ON CONFLICT ON CONSTRAINT uk_presentation_identifiers_gtin DO NOTHING;",
+            "    END IF;",
+            "END $$;",
+        ]
+        out.append("\n".join(block))
+
     if args.transaction:
         out.append("COMMIT;")
 
@@ -459,6 +622,28 @@ def emit(notes: list[dict], args: argparse.Namespace) -> list[str]:
             f"# multipack PENDING ({hint}) {label}: {desc!r} -> left NULL for review",
             file=sys.stderr,
         )
+    if gtin_accepted_lines or gtin_rejections:
+        accepted_gtins = len(gtin_form_of)
+        print(
+            f"# GTIN observed: {gtin_accepted_lines} line(s) accepted -> "
+            f"{accepted_gtins} distinct GTIN -> presentation_identifiers",
+            file=sys.stderr,
+        )
+        if gtin_accepted_lines > accepted_gtins:
+            print(
+                f"#   duplicate line occurrences collapsed: "
+                f"{gtin_accepted_lines - accepted_gtins}",
+                file=sys.stderr,
+            )
+        if gtin_rejections:
+            total_rejected = sum(gtin_rejections.values())
+            detail = ", ".join(
+                f"{reason}={count}" for reason, count in gtin_rejections.most_common()
+            )
+            print(
+                f"#   rejected (never repaired): {total_rejected} [{detail}]",
+                file=sys.stderr,
+            )
     return out
 
 
