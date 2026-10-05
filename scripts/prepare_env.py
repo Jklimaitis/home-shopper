@@ -227,11 +227,16 @@ def main(argv: list[str] | None = None) -> int:
             if chave in COMO_GERAR:
                 print(f"    gere:  {COMO_GERAR[chave]}")
             print(f"    grave: abra {env_path} e substitua o valor de {chave}")
-    if criado and pendentes_obrigatorias:
+    if criado:
         print(
-            "\nNOTA  a senha do Postgres vale na criacao do volume `pgdata`. Se este "
-            "projeto Compose ja subiu antes com outra senha, o login falha -- recriar "
-            "o volume apaga os dados (docker compose down -v)."
+            "\nNOTA  a senha do Postgres vale na criacao do volume `pgdata`: se o projeto "
+            "Compose deste worktree ja subiu com outra senha, o login falha -- recriar o "
+            "volume apaga os dados (docker compose down -v)."
+        )
+        print(
+            "NOTA  o container e fixo em `home_shopper-db` (docker-compose.yml), o mesmo do "
+            "checkout principal: os dois bancos nao sobem ao mesmo tempo. Nao remova o "
+            "container canonico para abrir espaco."
         )
 
     if pendentes_obrigatorias:
