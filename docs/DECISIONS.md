@@ -18,6 +18,12 @@ não significa que a decisão esteja aceita** — significa que o documento exis
 As definições de domínio estão em [CONTEXT.md](../CONTEXT.md). O estado implementado do banco
 está documentado no [ERD](ERD.md).
 
+## Decisões de infraestrutura e operação (não são ADRs de domínio)
+
+| Documento | Tema | Status |
+|---|---|---|
+| [2026-10-05 — qual banco é canônico](decisions/2026-10-05-canonical-database.md) | Dois bancos com dados divergentes (`home_shopper-db` vazio vs `postgres`/`home_shopper` com 15 notas); loader e input. Card `internal task` | **Aceita** (2026-10-05) — (A) `home_shopper-db` canônico + (c) os 4 inputs faltantes reconstruídos de `home_shopper`; base carregada e verificada 15/573 |
+
 ## Leitura por estado, não por número
 
 Os registros 0002 a 0006 misturam situações que valem caminhos de revisão diferentes:

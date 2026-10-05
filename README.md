@@ -75,12 +75,60 @@ prefix.
 
 ## Run it
 
+Prerequisites: Docker with Compose and the `psql` client
+(`postgresql-client`). The credentials come from `.env` — copy the model once
+and set a real `DB_PASSWORD`:
+
 ```bash
+cp .env.example .env
 docker compose up -d
 for f in db/*.sql; do
   psql -h localhost -U home_shopper -d home_shopper -v ON_ERROR_STOP=1 -f "$f"
 done
 ```
+
+`db/*.sql` applied in order is the **single source of truth of the schema**.
+The Compose service only starts the server; it deliberately does not mount the
+schema into the database, so the loop above is the only thing that applies it.
+That loop applies **schema, not data**. Without a host `psql`, apply the same
+files inside the container:
+
+```bash
+for f in db/*.sql; do
+  docker compose exec -T db psql -U home_shopper -d home_shopper -v ON_ERROR_STOP=1 < "$f"
+done
+```
+
+### Load the test data
+
+The receipts are loaded by `scripts/load_receipts.py`, which reads a
+directory of receipt JSON files and emits idempotent SQL on stdout. Nothing is
+written to disk (the generated SQL carries personal data — the NFC-e access
+keys — and must not land in the repository):
+
+```bash
+python3 scripts/load_receipts.py --dry-run                  # summary only
+python3 scripts/load_receipts.py | docker compose exec -T db \
+    psql -U home_shopper -d home_shopper -v ON_ERROR_STOP=1
+```
+
+`--source-dir` points at the preserved sources
+(`<evidence>/<private>` by
+default) and reads them recursively, so a `recovered/` subdirectory is picked
+up too. Those sources cover **11 notes / 467 lines**; the other **4 notes /
+106 lines** were reconstructed from the legacy `home_shopper` base by
+`scripts/recover_missing_inputs.py` (decision (A)+(c), 2026-10-05 —
+[docs/decisions/2026-10-05-canonical-database.md](docs/decisions/2026-10-05-canonical-database.md)):
+
+```bash
+python3 scripts/recover_missing_inputs.py \
+    --have-dir .../<private> \
+    --out-dir  .../<private>      # + --write
+```
+
+Together they are the **15 notes / 573 lines** of the canonical base. The load
+is idempotent (keyed notes on `(user_id, access_key)`, keyless ones on their
+natural key), so re-running the command above inserts nothing new.
 
 Tests:
 
