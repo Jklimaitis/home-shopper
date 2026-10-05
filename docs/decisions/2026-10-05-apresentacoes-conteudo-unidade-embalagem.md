@@ -1,6 +1,7 @@
 # Decisão — conteúdo, unidade e embalagem da apresentação (internal task)
 
-**Status:** **DECIDIDO — não implementado** (`ddl_applied: false`)
+**Status:** **DECIDIDO — IMPLEMENTADO** (`ddl_applied: true`, 2026-10-05) — ver
+[implementação](2026-10-05-ddl-apresentacoes-implementacao.md) e `db/005_presentations_form_model.sql`
 **Decisão de:** **Jonas** (dono da decisão) · **execução:** engenharia
 **Data:** 2026-10-05
 **Registrada em:** 2026-10-05 13:25 (-03), comentário `[DECISAO FINAL JONAS 2026-10-05]`

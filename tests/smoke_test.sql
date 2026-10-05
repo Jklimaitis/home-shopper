@@ -35,19 +35,33 @@ INSERT INTO synonyms (term, expands_to) VALUES
     ('int',   'integral'),
     ('moida', 'moida');
 
--- Presentation = de-para + unit conversion, in one table.
-INSERT INTO presentations (product_id, sale_unit, factor_base,
-                           description_raw, description_norm, store_id) VALUES
- ((SELECT id FROM products WHERE name='Chicken leg Swift'),   'pc', 1000,
-  'COXA DE FRANGO SWIFT 1 kg',    'COXA DE FRANGO SWIFT 1 kg',    NULL),
- ((SELECT id FROM products WHERE name='Surimi sticks Swift'), 'pc',  250,
-  'KANI KAMA SWIFT 250 g',        'KANI KAMA SWIFT 250 g',        NULL),
- ((SELECT id FROM products WHERE name='Minced beef Combo'),   'pc', 1000,
-  'CARNE MOIDA COMBO 1kg',        'CARNE MOIDA COMBO 1kg',        NULL),
- -- By weight: sale_unit 'kg' means SOLD BY WEIGHT. The factor is the
- -- PRICE REFERENCE (1 kg = 1000 g); the weight bought goes in quantity.
- ((SELECT id FROM products WHERE name='Beef tripe Combo'),    'kg', 1000,
-  'CUPIM COMBO kg',               'CUPIM COMBO KG',               NULL);
+-- The FORM (presentations) is the commercial form, independent of store: the
+-- content, the packaging, the recognised sale unit and the conversion factor.
+-- The store's wording lives in presentation_sources, one row per wording
+-- pointing at the form (decision J1).
+INSERT INTO presentations (product_id, sale_unit_recognized, content_kind,
+                           content_quantity, content_unit, factor_base) VALUES
+ ((SELECT id FROM products WHERE name='Chicken leg Swift'),   'KG', 'VARIABLE', NULL, NULL, 1000),
+ ((SELECT id FROM products WHERE name='Surimi sticks Swift'), 'PC', 'FIXED',     250, 'G',   250),
+ ((SELECT id FROM products WHERE name='Minced beef Combo'),   'KG', 'VARIABLE', NULL, NULL, 1000),
+ -- By weight: the form is SOLD BY WEIGHT. The factor is the PRICE REFERENCE
+ -- (1 kg = 1000 g); the weight actually bought goes in the line quantity.
+ ((SELECT id FROM products WHERE name='Beef tripe Combo'),    'KG', 'VARIABLE', NULL, NULL, 1000);
+
+-- Several stores may spell the same form differently; each spelling is one
+-- source row. Here all four are global (store_id NULL), so they must differ on
+-- match_key to stay unique.
+INSERT INTO presentation_sources (presentation_id, store_id, sale_unit,
+                                  description_raw, description_search)
+SELECT pr.id, NULL, v.sale_unit, v.descr, v.descr
+FROM (VALUES
+  ('Chicken leg Swift',   'pc', 'COXA DE FRANGO SWIFT 1 kg'),
+  ('Surimi sticks Swift', 'pc', 'KANI KAMA SWIFT 250 g'),
+  ('Minced beef Combo',   'pc', 'CARNE MOIDA COMBO 1kg'),
+  ('Beef tripe Combo',    'kg', 'CUPIM COMBO kg')
+) AS v(pname, sale_unit, descr)
+JOIN products p       ON p.name = v.pname
+JOIN presentations pr ON pr.product_id = p.id;
 
 INSERT INTO staging_receipts (user_id, source, source_ref, store_id,
                               total_gross, discount_total, amount_paid) VALUES
@@ -63,19 +77,19 @@ INSERT INTO staging_lines (receipt_id, line_no, description_raw, store_code,
 ((SELECT id FROM staging_receipts), 1, 'COXA DE FRANGO SWIFT 1 kg', '6169180',
  'pc', 1, 11.90, 0, 11.90,
  (SELECT id FROM products WHERE name='Chicken leg Swift'),
- (SELECT id FROM presentations WHERE description_raw LIKE 'COXA%'), 'DESCRIPTION'),
+ (SELECT presentation_id FROM presentation_sources WHERE description_raw LIKE 'COXA%'), 'DESCRIPTION'),
 ((SELECT id FROM staging_receipts), 5, 'CARNE MOIDA COMBO 1kg', '6220110',
  'pc', 1, 29.90, 0, 29.90,
  (SELECT id FROM products WHERE name='Minced beef Combo'),
- (SELECT id FROM presentations WHERE description_raw LIKE 'CARNE%'), 'DESCRIPTION'),
+ (SELECT presentation_id FROM presentation_sources WHERE description_raw LIKE 'CARNE%'), 'DESCRIPTION'),
 ((SELECT id FROM staging_receipts), 6, 'KANI KAMA SWIFT 250 g', '6187250',
  'pc', 1, 10.90, 0, 10.90,
  (SELECT id FROM products WHERE name='Surimi sticks Swift'),
- (SELECT id FROM presentations WHERE description_raw LIKE 'KANI%'), 'DESCRIPTION'),
+ (SELECT presentation_id FROM presentation_sources WHERE description_raw LIKE 'KANI%'), 'DESCRIPTION'),
 ((SELECT id FROM staging_receipts), 8, 'CUPIM COMBO kg', '6221920',
  'kg', 1.446, 39.90, 0, 57.70,
  (SELECT id FROM products WHERE name='Beef tripe Combo'),
- (SELECT id FROM presentations WHERE description_raw LIKE 'CUPIM%'), 'MANUAL');
+ (SELECT presentation_id FROM presentation_sources WHERE description_raw LIKE 'CUPIM%'), 'MANUAL');
 
 -- 10 lines with no product: the review-queue tail.
 INSERT INTO staging_lines (receipt_id, line_no, description_raw, store_code,
@@ -255,7 +269,7 @@ SELECT 'A10' AS test,
 DO $$
 DECLARE v_coxa TEXT; v_moela_calc TEXT;
 BEGIN
-    SELECT match_key INTO v_coxa FROM presentations WHERE description_raw LIKE 'COXA%';
+    SELECT match_key INTO v_coxa FROM presentation_sources WHERE description_raw LIKE 'COXA%';
     v_moela_calc := regexp_replace(lower('MOELA FRANGO ALM SEARA 1 kg'), '[^a-z0-9]+', ' ', 'g');
 
     RAISE NOTICE 'R1 coxa  (from db)  : [%]', v_coxa;
@@ -354,9 +368,9 @@ BEGIN
     INSERT INTO products (name, category_id, brand, base_unit)
         SELECT 'Ground coffee', id, 'Cafe', 'G' FROM categories LIMIT 1
         RETURNING id INTO v_product;
-    INSERT INTO presentations (product_id, sale_unit, factor_base,
-                               description_raw, description_norm)
-        SELECT v_product, 'pc', 500, 'CAFE TORRADO 500G', 'cafe torrado 500g';
+    INSERT INTO presentations (product_id, sale_unit_recognized, content_kind,
+                               content_quantity, content_unit, factor_base)
+        VALUES (v_product, 'PC', 'FIXED', 500, 'G', 500);
 
     -- products has no code column at all: the absence is the design.
     SELECT NOT EXISTS (
@@ -397,5 +411,77 @@ BEGIN
     RAISE NOTICE 'R5 KG excluded     : %', CASE WHEN NOT v_has_kg THEN 'PASS' ELSE 'FAIL' END;
     RAISE NOTICE 'R5 RESULT: PASS (only smallest units allowed)';
 END $$;
+
+-- -----------------------------------------------------------------------------
+-- N1: the form/source split (internal task)
+-- -----------------------------------------------------------------------------
+\echo ''
+\echo '--- N1: commercial form, mapping, GTIN and the loosened sale unit ---'
+DO $$
+DECLARE
+    v_pres    UUID;
+    v_receipt UUID;
+    v_bad     BOOLEAN;
+    v_pass    BOOLEAN := true;
+BEGIN
+    -- content_quantity is required IF AND ONLY IF content_kind = FIXED.
+    v_bad := false;
+    BEGIN
+        INSERT INTO presentations (product_id, content_kind, content_quantity, factor_base)
+            VALUES ((SELECT id FROM products WHERE name='Ground coffee'), 'FIXED', NULL, 1);
+    EXCEPTION WHEN check_violation THEN v_bad := true;
+    END;
+    RAISE NOTICE 'N1 FIXED without quantity refused : %',
+        CASE WHEN v_bad THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_bad;
+
+    -- GTIN lives per presentation now: format accepted, malformed refused.
+    SELECT presentation_id INTO v_pres
+      FROM presentation_sources WHERE description_raw LIKE 'KANI%';
+    INSERT INTO presentation_identifiers (presentation_id, gtin)
+        VALUES (v_pres, '7891000100103');
+    v_bad := false;
+    BEGIN
+        INSERT INTO presentation_identifiers (presentation_id, gtin)
+            VALUES (v_pres, 'ABC123');
+    EXCEPTION WHEN check_violation THEN v_bad := true;
+    END;
+    RAISE NOTICE 'N1 malformed GTIN refused        : %',
+        CASE WHEN v_bad THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_bad;
+
+    -- A captured label with a space is a fiscal fact, not a schema error:
+    -- the loosened sale-unit check lets it reach review instead of the bin.
+    INSERT INTO staging_receipts (user_id, source, total_gross, discount_total, amount_paid)
+        VALUES ((SELECT id FROM users LIMIT 1), 'MANUAL', 10, 0, 10)
+        RETURNING id INTO v_receipt;
+    INSERT INTO staging_lines (receipt_id, line_no, description_raw, sale_unit,
+                               quantity, unit_price, line_total)
+        VALUES (v_receipt, 1, 'AGUA MINERAL CX 10', 'CX 10', 1, 10, 10);
+    RAISE NOTICE 'N1 staging accepts "CX 10"       : PASS';
+
+    IF v_pass THEN
+        RAISE NOTICE 'N1 RESULT: PASS (form/mapping/GTIN split in place)';
+    ELSE
+        RAISE NOTICE 'N1 RESULT: FAIL';
+    END IF;
+END $$;
+
+SELECT 'N1' AS test,
+       (SELECT count(*) FROM information_schema.columns
+         WHERE table_name='presentations'
+           AND column_name IN ('store_id','description_raw','description_norm',
+                               'sale_unit','match_key')) AS wording_cols_in_form,
+       (SELECT count(*) FROM information_schema.columns
+         WHERE table_name='products' AND column_name='ean') AS ean_cols,
+       (SELECT count(*) FROM pg_constraint WHERE conname='uk_presentations_form') AS form_key,
+       CASE WHEN (SELECT count(*) FROM information_schema.columns
+                   WHERE table_name='presentations'
+                     AND column_name IN ('store_id','description_raw','description_norm',
+                                         'sale_unit','match_key')) = 0
+             AND (SELECT count(*) FROM information_schema.columns
+                   WHERE table_name='products' AND column_name='ean') = 0
+             AND (SELECT count(*) FROM pg_constraint WHERE conname='uk_presentations_form') = 1
+            THEN 'PASS' ELSE 'FAIL' END AS result;
 
 ROLLBACK;

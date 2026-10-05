@@ -1,6 +1,7 @@
 # Decisão — forma, mapeamento, GTIN, conteúdo e unidade (internal task)
 
-**Status:** **DECIDIDO — não implementado** (`ddl_applied: false`)
+**Status:** **DECIDIDO — IMPLEMENTADO** (`ddl_applied: true`, 2026-10-05) — ver
+[implementação](2026-10-05-ddl-apresentacoes-implementacao.md) e `db/005_presentations_form_model.sql`
 **Decisão de:** **Jonas** (dono da decisão) · **revisão técnica:** engenharia · **registro:** coordenador
 **Data:** 2026-10-05
 **Registrada em:** 2026-10-05 14:46 (-03), resposta do Jonas no Desktop — `A, A, a, A` — transcrita
