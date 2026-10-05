@@ -1,0 +1,37 @@
+# =============================================================================
+# home_shopper -- banco de desenvolvimento local
+#
+# Sobe APENAS o PostgreSQL 16. O schema NAO e montado aqui: a fonte de verdade
+# do schema e `db/*.sql`, aplicada pelo loader em ordem (README, secao
+# "Run it"). Montar `db/` em /docker-entrypoint-initdb.d faria o initdb aplicar
+# o schema no primeiro boot e o README aplicar de novo via psql -- duas
+# aplicacoes e duas verdades. Por isso o servico sobe o servidor; quem aplica o
+# schema e o loader.
+#
+# Mesma imagem e mesmas credenciais da CI (.github/workflows/ci.yml):
+# postgres:16-alpine, base/usuario `home_shopper`.
+#
+# Credenciais vem do `.env` (modelo em `.env.example`); nenhum segredo aqui.
+#   cp .env.example .env      # e edite DB_PASSWORD
+# =============================================================================
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: home_shopper-db
+    environment:
+      POSTGRES_USER: ${DB_USER:-home_shopper}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?defina DB_PASSWORD no .env -- veja .env.example}
+      POSTGRES_DB: ${DB_NAME:-home_shopper}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-home_shopper} -d ${DB_NAME:-home_shopper}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:
