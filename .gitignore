@@ -79,3 +79,6 @@ logs/
 _pr*.sql
 _iso*.sql
 _*.sql
+
+# Worktrees por card -- nunca versionar
+.worktrees/
