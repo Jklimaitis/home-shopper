@@ -109,7 +109,7 @@ erDiagram
         uuid      user_id FK
         uuid      store_id FK
         uuid      staging_receipt_id FK
-        char44    access_key "partial unique: idempotency"
+        text      access_key "partial unique: idempotency"
         date      purchase_date
         numeric   amount_paid
         text      payment_method

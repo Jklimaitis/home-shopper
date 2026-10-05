@@ -116,7 +116,10 @@ CREATE TABLE purchase_notes (
     store_id        UUID        NOT NULL,
     staging_receipt_id UUID,
     -- NFC-e access key: 44 digits. NULL when typed by hand.
-    access_key      CHAR(44),
+    -- TEXT, not CHAR(44): the CHECK below is what enforces the 44 digits,
+    -- and CHAR's blank-padding semantics buy nothing here (13 keys
+    -- are all exactly 44 digits; a 43-digit insert is rejected either way).
+    access_key      TEXT,
     purchase_date   DATE        NOT NULL,
     amount_paid     NUMERIC(12,2) NOT NULL,
     payment_method  TEXT,
