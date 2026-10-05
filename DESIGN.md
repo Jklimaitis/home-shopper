@@ -409,6 +409,8 @@ home_shopper is a Brazilian supermarket price comparison dashboard. The design s
 
 The visual hierarchy is data-first: prices are the largest elements on screen, store names are secondary, and product context is tertiary. Color is reserved for semantic meaning — green for price drops, red for increases, blue for best-price highlights — never decoration.
 
+**Executable layer.** This spec is the source; `design_system/` is the deliverable derived from it — `design_system/design-system.html` (navigable guide, 7 anchored sections), `design_system/tokens.css` (every token above as a custom property) and `design_system/design-system.css` (components with default/pressed/focused/disabled states). `design_system/EXTRACTION.md` holds the evidence: what was measured live on `meta.com`, and what was not obtained. The two layers are complementary, not substitutes — the deliverable is regenerated from this spec, never the reverse.
+
 ## Colors
 
 ### Brand & Accent

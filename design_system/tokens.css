@@ -1,0 +1,120 @@
+/* ==========================================================================
+   home_shopper — design tokens
+   Fonte: DESIGN.md (adaptação do sistema Meta, extraído de meta.com)
+   Valores conferidos no site ao vivo em 2026-10-05 (ver EXTRACTION.md)
+   Regra: nenhum valor fora daqui. Componente novo => token novo aqui primeiro.
+   ========================================================================== */
+
+:root {
+  /* ---- cor: marca ------------------------------------------------------- */
+  --color-primary: #0064e0;
+  --color-primary-deep: #0457cb;
+  --color-primary-soft: #0091ff;
+  --color-on-primary: #ffffff;
+  --color-ink-button: #000000;
+  --color-on-ink-button: #ffffff;
+  --color-fb-blue: #1876f2;
+
+  /* ---- cor: semântica -------------------------------------------------- */
+  --color-success: #31a24c;
+  --color-success-soft: #e8f5e9;
+  --color-attention: #f2a918;
+  --color-attention-soft: #fff8e1;
+  --color-warning: #f7b928;
+  --color-critical: #e41e3f;
+  --color-critical-soft: #ffebee;
+
+  /* ---- cor: preço (domínio do home_shopper) ----------------------------- */
+  --color-price-drop: #31a24c;
+  --color-price-rise: #e41e3f;
+  --color-price-stable: #5d6c7b;
+  --color-best-price: #0064e0;
+
+  /* ---- cor: identidade de loja (legenda de gráfico, nunca preenchimento) - */
+  --color-store-a: #0064e0;
+  --color-store-b: #f2a918;
+  --color-store-c: #31a24c;
+  --color-store-d: #a121ce;
+
+  /* ---- cor: superfície -------------------------------------------------- */
+  --color-canvas: #ffffff;
+  --color-surface-soft: #f1f4f7;
+  --color-ink-deep: #0a1317;
+  --color-ink: #1c1e21;
+  --color-charcoal: #444950;
+  --color-slate: #4b4c4f;
+  --color-steel: #5d6c7b;
+  --color-stone: #8595a4;
+  --color-hairline: #ced0d4;
+  --color-hairline-soft: #dee3e9;
+  --color-disabled-text: #bcc0c4;
+
+  /* ---- tipografia ------------------------------------------------------- */
+  /* Optimistic VF é proprietária e não é distribuída. A cadeia é a mesma do
+     site de origem: se a fonte licenciada estiver instalada, o layout é o
+     nativo; caso contrário degrada para Montserrat/Helvetica/Arial. */
+  --font-family-base: "Optimistic VF", Montserrat, Helvetica, Arial, "Noto Sans", sans-serif;
+  --font-family-mono: "Noto Sans Mono", Consolas, monospace;
+  --font-feature-heading: "ss01", "ss02";
+
+  --type-hero-display-size: 64px;   --type-hero-display-weight: 500; --type-hero-display-lh: 1.16;
+  --type-display-lg-size: 48px;     --type-display-lg-weight: 500;   --type-display-lg-lh: 1.17;
+  --type-heading-lg-size: 36px;     --type-heading-lg-weight: 500;   --type-heading-lg-lh: 1.28;
+  --type-heading-md-size: 28px;     --type-heading-md-weight: 300;   --type-heading-md-lh: 1.21;
+  --type-heading-sm-size: 24px;     --type-heading-sm-weight: 500;   --type-heading-sm-lh: 1.25;
+  --type-subtitle-lg-size: 18px;    --type-subtitle-lg-weight: 700;  --type-subtitle-lg-lh: 1.44;
+  --type-subtitle-md-size: 18px;    --type-subtitle-md-weight: 400;  --type-subtitle-md-lh: 1.44;
+  --type-body-md-size: 16px;        --type-body-md-weight: 400;      --type-body-md-lh: 1.50;
+  --type-body-md-ls: -0.16px;
+  --type-body-sm-size: 14px;        --type-body-sm-weight: 400;      --type-body-sm-lh: 1.43;
+  --type-body-sm-ls: -0.14px;
+  --type-caption-size: 12px;        --type-caption-weight: 400;      --type-caption-lh: 1.33;
+  --type-button-size: 14px;         --type-button-weight: 700;       --type-button-ls: -0.14px;
+  --type-price-display-size: 32px;  --type-price-display-weight: 700;--type-price-display-lh: 1.20;
+  --type-price-display-ls: -0.32px;
+
+  /* ---- espaçamento ------------------------------------------------------ */
+  --space-xxs: 4px;
+  --space-xs: 8px;
+  --space-sm: 10px;
+  --space-md: 12px;
+  --space-base: 16px;
+  --space-lg: 20px;
+  --space-xl: 24px;
+  --space-xxl: 32px;
+  --space-xxxl: 40px;
+  --space-section-sm: 48px;
+  --space-section: 64px;
+  --space-section-lg: 80px;
+  --space-hero: 120px;
+
+  /* ---- raio ------------------------------------------------------------- */
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 16px;
+  --radius-xxl: 24px;
+  --radius-xxxl: 32px;
+  --radius-feature: 40px;
+  --radius-full: 100px;
+  --radius-circle: 9999px;
+
+  /* ---- elevação --------------------------------------------------------- */
+  --elevation-0: none;
+  --elevation-1: rgba(0, 0, 0, 0.2) 1px 1px 0px 0px;
+  --elevation-2: rgba(20, 22, 26, 0.3) 0px 1px 4px 0px;
+  --border-ghost: 2px solid rgba(10, 19, 23, 0.12);
+
+  /* ---- layout ----------------------------------------------------------- */
+  --layout-max-width: 1280px;
+  --layout-gutter: 32px;
+  --layout-gap: 24px;
+
+  /* ---- movimento -------------------------------------------------------- */
+  --motion-fast: 150ms;
+  --motion-base: 200ms;
+  --motion-slow: 300ms;
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+}

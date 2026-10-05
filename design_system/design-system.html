@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>home_shopper — design system</title>
+<meta name="description" content="Camada visual do home_shopper: tokens, componentes e padrões de layout para o painel de comparação de preços entre lojas.">
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="design-system.css">
+</head>
+<body>
+
+<!-- ============================ navegação fixa ============================ -->
+<nav class="nav-top">
+  <span class="nav-top__brand">home_shopper · design system</span>
+  <div class="nav-top__links">
+    <a class="pill-tab" href="#hero">Hero</a>
+    <a class="pill-tab" href="#tipografia">Tipografia</a>
+    <a class="pill-tab" href="#cores">Cores</a>
+    <a class="pill-tab" href="#componentes">Componentes</a>
+    <a class="pill-tab" href="#layout">Layout</a>
+    <a class="pill-tab" href="#movimento">Movimento</a>
+    <a class="pill-tab" href="#icones">Ícones</a>
+  </div>
+  <span class="btn-icon" aria-hidden="true">
+    <svg class="icon icon--20" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M15.5 15.5 21 21"/></svg>
+  </span>
+</nav>
+
+<main class="container">
+
+  <!-- ============================ seção 0 — hero ========================= -->
+  <section class="section" id="hero">
+    <div class="card-promo-strip">
+      <h1 class="t-hero-display">Onde é mais barato comprar</h1>
+      <p class="t-subtitle-md">Design system do home_shopper: catálogo canônico, comparação de preço entre lojas e painel analítico. Adaptado do sistema Meta (meta.com), com tokens, componentes e estados verificados na fonte.</p>
+      <div class="row">
+        <a class="btn-primary" href="#componentes">Ver componentes</a>
+        <a class="btn-secondary" href="#cores">Ver tokens</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========================= seção 1 — tipografia ===================== -->
+  <section class="section" id="tipografia">
+    <h2 class="t-heading-lg section__title">Tipografia</h2>
+    <p class="section__note">
+      Fonte única: <strong>Optimistic VF</strong> (variável, eixo 200–800) — confirmada na página de origem.
+      Cadeia de fallback: Montserrat, Helvetica, Arial, Noto Sans. Títulos carregam <code>ss01, ss02</code>.
+      O corpo usa letter-spacing negativo (-0,14 a -0,16px); a métrica já vem apertada da fonte, não comprimir mais.
+    </p>
+
+    <table class="spec-table">
+      <caption class="t-caption">Escala — tamanho / line-height alinhados à direita</caption>
+      <thead>
+        <tr>
+          <th class="spec-table__name" scope="col">Estilo</th>
+          <th class="spec-table__preview" scope="col">Prévia</th>
+          <th class="spec-table__metric" scope="col">px / lh</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td class="spec-table__name t-body-sm-bold">hero-display</td><td class="spec-table__preview"><span class="t-hero-display">Preço por unidade-base</span></td><td class="spec-table__metric">64 / 1.16</td></tr>
+        <tr><td class="spec-table__name t-body-sm-bold">display-lg</td><td class="spec-table__preview"><span class="t-display-lg">Comparação entre lojas</span></td><td class="spec-table__metric">48 / 1.17</td></tr>
+        <tr><td class="spec-table__name t-body-sm-bold">heading-lg</td><td class="spec-table__preview"><span class="t-heading-lg">Painel analítico</span></td><td class="spec-table__metric">36 / 1.28</td></tr>
+        <tr><td class="spec-table__name t-body-sm-bold">heading-md</td><td class="spec-table__preview"><span class="t-heading-md">Editorial em peso 300</span></td><td class="spec-table__metric">28 / 1.21</td></tr>
+        <tr><td class="spec-table__name t-body-sm-bold">heading-sm</td><td class="spec-table__preview"><span class="t-heading-sm">Título de card</span></td><td class="spec-table__metric">24 / 1.25</td></tr>
+        <tr><td class="spec-table__name t-body-sm-bold">subtitle-lg</td><td class="spec-table__preview"><span class="t-subtitle-lg">Nome da loja</span></td><td class="spec-table__metric">18 / 1.44</td></tr>
+        <tr><td class="spec-table__name t-body-sm-bold">subtitle-md</td><td class="spec-table__preview"><span class="t-subtitle-md">Subtítulo de apoio</span></td><td class="spec-table__metric">18 / 1.44</td></tr>
+        <tr><td class="spec-table__name t-body-sm-bold">body-md</td><td class="spec-table__preview"><span class="t-body-md">Texto corrido padrão do produto.</span></td><td class="spec-table__metric">16 / 1.50</td></tr>
+        <tr><td class="spec-table__name t-body-sm-bold">body-md-bold</td><td class="spec-table__preview"><span class="t-body-md-bold">Ênfase e link inline</span></td><td class="spec-table__metric">16 / 1.50</td></tr>
+        <tr><td class="spec-table__name t-body-sm-bold">body-sm</td><td class="spec-table__preview"><span class="t-body-sm">Célula de tabela e texto auxiliar.</span></td><td class="spec-table__metric">14 / 1.43</td></tr>
+        <tr><td class="spec-table__name t-body-sm-bold">body-sm-bold</td><td class="spec-table__preview"><span class="t-body-sm-bold">Rótulo de pill e de badge</span></td><td class="spec-table__metric">14 / 1.43</td></tr>
+        <tr><td class="spec-table__name t-body-sm-bold">caption</td><td class="spec-table__preview"><span class="t-caption">Microcópia e nota de rodapé.</span></td><td class="spec-table__metric">12 / 1.33</td></tr>
+        <tr><td class="spec-table__name t-body-sm-bold">price-display</td><td class="spec-table__preview"><span class="price-tag">R$ 4,49<span class="price-tag__unit">/kg</span></span></td><td class="spec-table__metric">32 / 1.20</td></tr>
+        <tr><td class="spec-table__name t-body-sm-bold">price-unit</td><td class="spec-table__preview"><span class="price-tag__unit">por kg · por un · por L</span></td><td class="spec-table__metric">14 / 1.43</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ============================= seção 2 — cores ====================== -->
+  <section class="section" id="cores">
+    <h2 class="t-heading-lg section__title">Cores e superfícies</h2>
+    <p class="section__note">
+      Valores conferidos na página de origem (ver <code>EXTRACTION.md</code>): <code>#0a1317</code>, <code>#1c1e21</code>,
+      <code>#5d6c7b</code>, <code>#0457cb</code>, <code>#f1f4f7</code> e o branco de canvas.
+      <strong>Cobalto é escasso</strong> — só onde há melhor preço. Verde é queda, vermelho é alta, e nunca cor sozinha: sempre com seta e texto.
+    </p>
+
+    <h3 class="t-heading-sm section__title">Marca e ação</h3>
+    <div class="swatch-grid">
+      <div class="swatch"><span class="swatch__chip swatch__chip--primary"></span><div class="swatch__body"><div class="swatch__name">primary</div><div class="swatch__value">#0064e0 · melhor preço</div></div></div>
+      <div class="swatch"><span class="swatch__chip swatch__chip--primary-deep"></span><div class="swatch__body"><div class="swatch__name">primary-deep</div><div class="swatch__value">#0457cb · pressed</div></div></div>
+      <div class="swatch"><span class="swatch__chip swatch__chip--fb-blue"></span><div class="swatch__body"><div class="swatch__name">fb-blue</div><div class="swatch__value">#1876f2 · foco</div></div></div>
+      <div class="swatch"><span class="swatch__chip swatch__chip--ink-button"></span><div class="swatch__body"><div class="swatch__name">ink-button</div><div class="swatch__value">#000000 · ação primária</div></div></div>
+    </div>
+
+    <h3 class="t-heading-sm section__title">Preço</h3>
+    <div class="swatch-grid">
+      <div class="swatch"><span class="swatch__chip swatch__chip--price-drop"></span><div class="swatch__body"><div class="swatch__name">price-drop</div><div class="swatch__value">#31a24c</div></div></div>
+      <div class="swatch"><span class="swatch__chip swatch__chip--price-rise"></span><div class="swatch__body"><div class="swatch__name">price-rise</div><div class="swatch__value">#e41e3f</div></div></div>
+      <div class="swatch"><span class="swatch__chip swatch__chip--price-stable"></span><div class="swatch__body"><div class="swatch__name">price-stable</div><div class="swatch__value">#5d6c7b</div></div></div>
+      <div class="swatch"><span class="swatch__chip swatch__chip--best-price"></span><div class="swatch__body"><div class="swatch__name">best-price</div><div class="swatch__value">#0064e0</div></div></div>
+    </div>
+
+    <h3 class="t-heading-sm section__title">Identidade de loja (legenda de gráfico)</h3>
+    <div class="swatch-grid">
+      <div class="swatch"><span class="swatch__chip swatch__chip--store-a"></span><div class="swatch__body"><div class="swatch__name">store-a</div><div class="swatch__value">#0064e0</div></div></div>
+      <div class="swatch"><span class="swatch__chip swatch__chip--store-b"></span><div class="swatch__body"><div class="swatch__name">store-b</div><div class="swatch__value">#f2a918</div></div></div>
+      <div class="swatch"><span class="swatch__chip swatch__chip--store-c"></span><div class="swatch__body"><div class="swatch__name">store-c</div><div class="swatch__value">#31a24c</div></div></div>
+      <div class="swatch"><span class="swatch__chip swatch__chip--store-d"></span><div class="swatch__body"><div class="swatch__name">store-d</div><div class="swatch__value">#a121ce</div></div></div>
+    </div>
+    <p class="section__note">Quatro cores existem; o conteúdo de demonstração tem 6 redes. Acima de 4 séries a legenda passa a rotular direto na linha em vez de acrescentar cor.</p>
+
+    <h3 class="t-heading-sm section__title">Superfície e texto</h3>
+    <div class="swatch-grid">
+      <div class="swatch"><span class="swatch__chip swatch__chip--canvas"></span><div class="swatch__body"><div class="swatch__name">canvas</div><div class="swatch__value">#ffffff</div></div></div>
+      <div class="swatch"><span class="swatch__chip swatch__chip--surface-soft"></span><div class="swatch__body"><div class="swatch__name">surface-soft</div><div class="swatch__value">#f1f4f7</div></div></div>
+      <div class="swatch"><span class="swatch__chip swatch__chip--hairline-soft"></span><div class="swatch__body"><div class="swatch__name">hairline-soft</div><div class="swatch__value">#dee3e9</div></div></div>
+      <div class="swatch"><span class="swatch__chip swatch__chip--hairline"></span><div class="swatch__body"><div class="swatch__name">hairline</div><div class="swatch__value">#ced0d4</div></div></div>
+      <div class="swatch"><span class="swatch__chip swatch__chip--ink-deep"></span><div class="swatch__body"><div class="swatch__name">ink-deep</div><div class="swatch__value">#0a1317</div></div></div>
+      <div class="swatch"><span class="swatch__chip swatch__chip--ink"></span><div class="swatch__body"><div class="swatch__name">ink</div><div class="swatch__value">#1c1e21</div></div></div>
+      <div class="swatch"><span class="swatch__chip swatch__chip--steel"></span><div class="swatch__body"><div class="swatch__name">steel</div><div class="swatch__value">#5d6c7b</div></div></div>
+      <div class="swatch"><span class="swatch__chip swatch__chip--stone"></span><div class="swatch__body"><div class="swatch__name">stone</div><div class="swatch__value">#8595a4</div></div></div>
+      <div class="swatch"><span class="swatch__chip swatch__chip--disabled"></span><div class="swatch__body"><div class="swatch__name">disabled-text</div><div class="swatch__value">#bcc0c4</div></div></div>
+    </div>
+
+    <h3 class="t-heading-sm section__title">Semântica</h3>
+    <div class="swatch-grid">
+      <div class="swatch"><span class="swatch__chip swatch__chip--success"></span><div class="swatch__body"><div class="swatch__name">success</div><div class="swatch__value">#31a24c</div></div></div>
+      <div class="swatch"><span class="swatch__chip swatch__chip--attention"></span><div class="swatch__body"><div class="swatch__name">attention</div><div class="swatch__value">#f2a918</div></div></div>
+      <div class="swatch"><span class="swatch__chip swatch__chip--warning"></span><div class="swatch__body"><div class="swatch__name">warning</div><div class="swatch__value">#f7b928</div></div></div>
+      <div class="swatch"><span class="swatch__chip swatch__chip--critical"></span><div class="swatch__body"><div class="swatch__name">critical</div><div class="swatch__value">#e41e3f</div></div></div>
+    </div>
+  </section>
+
+  <!-- ========================= seção 3 — componentes ==================== -->
+  <section class="section" id="componentes">
+    <h2 class="t-heading-lg section__title">Componentes</h2>
+    <p class="section__note">
+      Toda borda arredondada é pill ou card: botão nunca é quadrado.
+      Cada linha mostra o estado padrão e, ao lado, o estado forçado por classe — o que não existe no
+      sistema de origem não está aqui.
+    </p>
+
+    <h3 class="t-heading-sm section__title">Botões</h3>
+    <div class="stack">
+      <div class="row">
+        <span class="t-body-sm t-steel">primary / marketing</span>
+        <button class="btn-primary" type="button">Adicionar à lista</button>
+        <button class="btn-primary is-hover" type="button">Pressed</button>
+        <button class="btn-primary is-disabled" type="button" disabled>Disabled</button>
+        <button class="btn-primary force-focus" type="button">Focus</button>
+      </div>
+      <div class="row">
+        <span class="t-body-sm t-steel">buy-cta / melhor preço</span>
+        <button class="btn-buy-cta" type="button">Comprar aqui</button>
+        <button class="btn-buy-cta is-hover" type="button">Pressed</button>
+        <button class="btn-buy-cta is-disabled" type="button" disabled>Disabled</button>
+        <button class="btn-buy-cta force-focus" type="button">Focus</button>
+      </div>
+      <div class="row">
+        <span class="t-body-sm t-steel">secundário e ghost</span>
+        <button class="btn-secondary" type="button">Comparar</button>
+        <button class="btn-secondary force-focus" type="button">Focus</button>
+        <button class="btn-ghost" type="button">Ver histórico</button>
+        <button class="btn-ghost is-disabled" type="button" disabled>Disabled</button>
+        <button class="btn-icon" type="button" aria-label="Atualizar preços">
+          <svg class="icon icon--20" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v5h-5"/></svg>
+        </button>
+      </div>
+      <div class="row">
+        <span class="t-body-sm t-steel">pill tabs</span>
+        <a class="pill-tab is-active" href="#componentes">Laticínios</a>
+        <a class="pill-tab" href="#componentes">Carnes</a>
+        <a class="pill-tab" href="#componentes">Mercearia</a>
+      </div>
+      <div class="row">
+        <span class="t-body-sm t-steel">filtros</span>
+        <button class="filter-chip is-active" type="button" aria-pressed="true">Todos</button>
+        <button class="filter-chip" type="button" aria-pressed="false">Mercado Central</button>
+        <button class="filter-chip" type="button" aria-pressed="false">Mercado Sul</button>
+        <button class="filter-chip" type="button" aria-pressed="false">Supermarket G</button>
+      </div>
+    </div>
+
+    <h3 class="t-heading-sm section__title">Badges de variação</h3>
+    <div class="row">
+      <span class="badge badge--price-drop"><svg class="icon icon--16" viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M6 13l6 6 6-6"/></svg>−10%</span>
+      <span class="badge badge--price-rise"><svg class="icon icon--16" viewBox="0 0 24 24"><path d="M12 19V5"/><path d="M6 11l6-6 6 6"/></svg>+11%</span>
+      <span class="badge badge--price-stable">estável</span>
+      <span class="badge badge--best-price">melhor preço</span>
+      <span class="badge badge--success">match</span>
+      <span class="badge badge--attention">pendente</span>
+      <span class="badge badge--warning">revisar</span>
+      <span class="badge badge--critical">não é nenhum</span>
+      <span class="badge badge--store">PA</span>
+    </div>
+
+    <h3 class="t-heading-sm section__title">Card de comparação — o componente central</h3>
+    <div class="card-price-comparison">
+      <div class="row row--between">
+        <div>
+          <h4 class="t-heading-sm card__title">Leite Integral 1L</h4>
+          <p class="t-body-sm card__meta">Laticínios · unidade-base: L</p>
+        </div>
+        <span class="badge badge--store">3 lojas</span>
+      </div>
+      <div class="stack">
+        <div class="store-row store-row--best">
+          <div>
+            <div class="store-row__name">Mercado Central</div>
+            <div class="t-body-sm t-steel">atualizado 15/06/2026</div>
+          </div>
+          <div class="store-row__side">
+            <span class="price-tag">R$ 4,49<span class="price-tag__unit">/L</span></span>
+            <span class="badge badge--price-drop"><svg class="icon icon--16" viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M6 13l6 6 6-6"/></svg>−10%</span>
+            <span class="badge badge--best-price">melhor preço</span>
+            <button class="btn-buy-cta" type="button">Comprar aqui</button>
+          </div>
+        </div>
+        <div class="store-row">
+          <div>
+            <div class="store-row__name">Mercado Sul</div>
+            <div class="t-body-sm t-steel">atualizado 15/06/2026</div>
+          </div>
+          <div class="store-row__side">
+            <span class="price-tag">R$ 4,99<span class="price-tag__unit">/L</span></span>
+            <span class="badge badge--price-stable">estável</span>
+          </div>
+        </div>
+        <div class="store-row">
+          <div>
+            <div class="store-row__name">Supermarket G</div>
+            <div class="t-body-sm t-steel">atualizado 14/06/2026</div>
+          </div>
+          <div class="store-row__side">
+            <span class="price-tag">R$ 5,29<span class="price-tag__unit">/L</span></span>
+            <span class="badge badge--price-rise"><svg class="icon icon--16" viewBox="0 0 24 24"><path d="M12 19V5"/><path d="M6 11l6-6 6 6"/></svg>+5%</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h3 class="t-heading-sm section__title">Cards de apoio</h3>
+    <div class="grid grid--3">
+      <div class="card-stat">
+        <p class="t-body-sm t-steel">Total gasto (mês)</p>
+        <p class="price-tag">R$ 1.247,83</p>
+        <span class="badge badge--price-rise">+12%</span>
+      </div>
+      <div class="card-stat">
+        <p class="t-body-sm t-steel">Economia média</p>
+        <p class="price-tag">R$ 3,42<span class="price-tag__unit">/kg</span></p>
+        <span class="badge badge--price-drop">−8%</span>
+      </div>
+      <div class="card-stat">
+        <p class="t-body-sm t-steel">Pendências de revisão</p>
+        <p class="price-tag">7</p>
+        <span class="badge badge--attention">2 divergências</span>
+      </div>
+    </div>
+
+    <div class="grid grid--3">
+      <div class="card-product">
+        <div class="product-thumbnail"><svg class="icon icon--32" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M4 14l4-4 4 4 3-3 5 5"/></svg></div>
+        <h4 class="t-subtitle-lg card__title">Arroz Branco 5kg</h4>
+        <p class="t-body-sm card__meta">Mercearia · base: g</p>
+        <div class="row"><span class="price-tag">R$ 22,90<span class="price-tag__unit">/kg</span></span><span class="badge badge--price-drop">−5%</span></div>
+      </div>
+      <div class="card-icon-feature">
+        <svg class="icon icon--24 icon--best" viewBox="0 0 24 24"><path d="M12 4l2.4 5 5.6.8-4 3.9 1 5.5-5-2.7-5 2.7 1-5.5-4-3.9 5.6-.8z"/></svg>
+        <h4 class="t-subtitle-lg card__title">Melhor preço</h4>
+        <p class="t-body-sm card__meta">Menor preço por unidade-base entre as lojas com o produto.</p>
+      </div>
+      <div class="card-checkout-summary">
+        <h4 class="t-heading-sm card__title">Resumo</h4>
+        <p class="t-body-sm card__meta">3 lojas comparadas · 1 produto · 90 dias</p>
+        <button class="btn-buy-cta" type="button">Ver melhor preço</button>
+      </div>
+    </div>
+
+    <h3 class="t-heading-sm section__title">Gráfico de histórico</h3>
+    <div class="card-chart">
+      <h4 class="t-heading-sm card__title">Preço por unidade-base — 90 dias</h4>
+      <svg class="chart" viewBox="0 0 720 220" role="img" aria-label="Preço por litro do leite integral em três lojas ao longo de 90 dias">
+        <line class="chart__grid" x1="60" y1="40"  x2="700" y2="40"/>
+        <line class="chart__grid" x1="60" y1="90"  x2="700" y2="90"/>
+        <line class="chart__grid" x1="60" y1="140" x2="700" y2="140"/>
+        <line class="chart__grid" x1="60" y1="190" x2="700" y2="190"/>
+        <path class="chart__line-a" d="M60 60 L180 70 L300 100 L420 150 L540 165 L700 170"/>
+        <path class="chart__line-b" d="M60 80 L180 90 L300 110 L420 130 L540 140 L700 150"/>
+        <path class="chart__line-c" d="M60 100 L180 105 L300 120 L420 125 L540 130 L700 135"/>
+        <circle class="chart__dot" cx="700" cy="170" r="4"/>
+        <text class="chart__axis" x="60" y="212">abr</text>
+        <text class="chart__axis" x="300" y="212">mai</text>
+        <text class="chart__axis" x="540" y="212">jun</text>
+      </svg>
+      <div class="chart-legend">
+        <span class="chart-legend__item"><span class="chart-legend__swatch chart-legend__swatch--a"></span>Mercado Central</span>
+        <span class="chart-legend__item"><span class="chart-legend__swatch chart-legend__swatch--b"></span>Mercado Sul</span>
+        <span class="chart-legend__item"><span class="chart-legend__swatch chart-legend__swatch--c"></span>Supermarket G</span>
+      </div>
+    </div>
+
+    <h3 class="t-heading-sm section__title">Entrada de dados</h3>
+    <div class="grid grid--3">
+      <div>
+        <label class="t-body-sm-bold" for="q">Busca de produto</label>
+        <input class="text-input" id="q" type="text" placeholder="Leite Integral 1L">
+      </div>
+      <div>
+        <label class="t-body-sm-bold" for="q2">Focado</label>
+        <input class="text-input text-input--focused" id="q2" type="text" value="Arroz Branco 5kg">
+      </div>
+      <div>
+        <label class="t-body-sm-bold" for="q3">Com erro</label>
+        <input class="text-input text-input--error" id="q3" type="text" value="CP" aria-describedby="q3-err">
+        <p class="t-body-sm field-error" id="q3-err">Descrição curta demais para buscar.</p>
+      </div>
+    </div>
+    <div class="row">
+      <span class="search-pill"><svg class="icon icon--16" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M15.5 15.5 21 21"/></svg>Buscar produto…</span>
+    </div>
+
+    <h3 class="t-heading-sm section__title">Tabela — detalhe da loja</h3>
+    <table class="table table--striped">
+      <thead>
+        <tr><th scope="col">Produto</th><th scope="col">Categoria</th><th scope="col">Preço</th><th scope="col">Variação</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Leite Integral 1L</td><td>Laticínios</td><td>R$ 4,49<span class="price-tag__unit">/L</span></td><td><span class="badge badge--price-drop">−10%</span></td></tr>
+        <tr><td>Pão Francês 500g</td><td>Padaria</td><td>R$ 8,90<span class="price-tag__unit">/kg</span></td><td><span class="badge badge--price-stable">estável</span></td></tr>
+        <tr><td>Coxa de Frango 1kg</td><td>Carnes</td><td>R$ 8,90<span class="price-tag__unit">/kg</span></td><td><span class="badge badge--price-rise">+11%</span></td></tr>
+        <tr><td>Café Torrado 500g</td><td>Mercearia</td><td>R$ 12,90<span class="price-tag__unit">/kg</span></td><td><span class="badge badge--price-drop">−8%</span></td></tr>
+      </tbody>
+    </table>
+
+    <h3 class="t-heading-sm section__title">Feedback e carregamento</h3>
+    <div class="grid grid--3">
+      <div class="empty-state">
+        <p class="t-subtitle-lg">Nenhum preço encontrado</p>
+        <p class="t-body-sm">Este produto ainda não tem preço consolidado em nenhuma loja.</p>
+        <button class="btn-primary" type="button">Adicionar nota fiscal</button>
+      </div>
+      <div class="card-stat">
+        <span class="skeleton skeleton--title"></span>
+        <span class="skeleton skeleton--line"></span>
+        <span class="skeleton skeleton--block"></span>
+      </div>
+      <div>
+        <span class="tooltip">R$ 4,49 — Mercado Central, 15/06/2026</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ seção 4 — layout ====================== -->
+  <section class="section" id="layout">
+    <h2 class="t-heading-lg section__title">Layout e espaçamento</h2>
+    <p class="section__note">Base de 4px, passo dominante de 8px. Card em 32px, seção em 64px. Container de 1280px com gutter de 32px.</p>
+
+    <h3 class="t-heading-sm section__title">Escala de espaçamento</h3>
+    <div class="stack">
+      <div class="row"><span class="space-demo space-demo--xxs"></span><span class="t-caption t-steel">xxs 4px</span></div>
+      <div class="row"><span class="space-demo space-demo--xs"></span><span class="t-caption t-steel">xs 8px</span></div>
+      <div class="row"><span class="space-demo space-demo--sm"></span><span class="t-caption t-steel">sm 10px</span></div>
+      <div class="row"><span class="space-demo space-demo--md"></span><span class="t-caption t-steel">md 12px</span></div>
+      <div class="row"><span class="space-demo space-demo--base"></span><span class="t-caption t-steel">base 16px</span></div>
+      <div class="row"><span class="space-demo space-demo--lg"></span><span class="t-caption t-steel">lg 20px</span></div>
+      <div class="row"><span class="space-demo space-demo--xl"></span><span class="t-caption t-steel">xl 24px</span></div>
+      <div class="row"><span class="space-demo space-demo--xxl"></span><span class="t-caption t-steel">xxl 32px</span></div>
+      <div class="row"><span class="space-demo space-demo--xxxl"></span><span class="t-caption t-steel">xxxl 40px</span></div>
+      <div class="row"><span class="space-demo space-demo--section-sm"></span><span class="t-caption t-steel">section-sm 48px</span></div>
+      <div class="row"><span class="space-demo space-demo--section"></span><span class="t-caption t-steel">section 64px</span></div>
+      <div class="row"><span class="space-demo space-demo--section-lg"></span><span class="t-caption t-steel">section-lg 80px</span></div>
+      <div class="row"><span class="space-demo space-demo--hero"></span><span class="t-caption t-steel">hero 120px</span></div>
+    </div>
+
+    <h3 class="t-heading-sm section__title">Escala de raio</h3>
+    <div class="row">
+      <div class="radius-demo radius-demo--xs"></div>
+      <div class="radius-demo radius-demo--sm"></div>
+      <div class="radius-demo radius-demo--md"></div>
+      <div class="radius-demo radius-demo--lg"></div>
+      <div class="radius-demo radius-demo--xl"></div>
+      <div class="radius-demo radius-demo--xxl"></div>
+      <div class="radius-demo radius-demo--xxxl"></div>
+      <div class="radius-demo radius-demo--feature"></div>
+      <div class="radius-demo radius-demo--full"></div>
+    </div>
+    <p class="section__note">Pill (100px) é assinatura: botão, badge e chip nunca são quadrados. Card fotográfico/produto começa em 32px.</p>
+
+    <h3 class="t-heading-sm section__title">Padrão do painel — 12 colunas</h3>
+    <div class="grid grid--sidebar">
+      <div class="card-chart">
+        <h4 class="t-heading-sm card__title">Variação de preços</h4>
+        <p class="t-body-sm card__meta">Coluna larga (8/12): série temporal.</p>
+      </div>
+      <div class="stack">
+        <div class="card-stat"><p class="t-body-sm t-steel">Alertas</p><p class="price-tag">5</p></div>
+        <div class="card-stat"><p class="t-body-sm t-steel">Cobertura</p><p class="price-tag">92%</p></div>
+      </div>
+    </div>
+
+    <h3 class="t-heading-sm section__title">Grade de produtos — 4-up</h3>
+    <div class="grid grid--4">
+      <div class="card-product"><div class="product-thumbnail"></div><h4 class="t-body-md-bold card__title">Leite Integral 1L</h4><span class="badge badge--price-drop">−10%</span></div>
+      <div class="card-product"><div class="product-thumbnail"></div><h4 class="t-body-md-bold card__title">Pão Francês 500g</h4><span class="badge badge--price-stable">estável</span></div>
+      <div class="card-product"><div class="product-thumbnail"></div><h4 class="t-body-md-bold card__title">Coxa de Frango 1kg</h4><span class="badge badge--price-rise">+11%</span></div>
+      <div class="card-product"><div class="product-thumbnail"></div><h4 class="t-body-md-bold card__title">Arroz Branco 5kg</h4><span class="badge badge--price-drop">−5%</span></div>
+    </div>
+  </section>
+
+  <!-- =========================== seção 5 — movimento =================== -->
+  <section class="section" id="movimento">
+    <h2 class="t-heading-lg section__title">Movimento e interação</h2>
+    <p class="section__note">
+      Movimento é curto e funcional. O sistema de origem não publica timings — os valores abaixo são a proposta
+      declarada em <code>DESIGN.md</code> (§ Known Gaps) e ficam centralizados em <code>tokens.css</code>.
+      Toda animação é desligada sob <code>prefers-reduced-motion</code>.
+    </p>
+    <table class="spec-table">
+      <thead><tr><th class="spec-table__name" scope="col">Gesto</th><th class="spec-table__preview" scope="col">Demonstração</th><th class="spec-table__metric" scope="col">duração</th></tr></thead>
+      <tbody>
+        <tr><td class="spec-table__name t-body-sm-bold">entrada de card</td><td class="spec-table__preview"><div class="motion-demo motion-demo--entry">sobe 12px e aparece</div></td><td class="spec-table__metric">300ms ease-out</td></tr>
+        <tr><td class="spec-table__name t-body-sm-bold">elevação no hover</td><td class="spec-table__preview"><div class="motion-demo motion-demo--lift">passe o mouse</div></td><td class="spec-table__metric">200ms ease-out</td></tr>
+        <tr><td class="spec-table__name t-body-sm-bold">realce de foco</td><td class="spec-table__preview"><div class="motion-demo motion-demo--glow">passe o mouse</div></td><td class="spec-table__metric">200ms ease-out</td></tr>
+        <tr><td class="spec-table__name t-body-sm-bold">transição de botão</td><td class="spec-table__preview"><button class="btn-primary" type="button">passe o mouse</button></td><td class="spec-table__metric">150ms ease-out</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ============================= seção 6 — ícones =================== -->
+  <section class="section" id="icones">
+    <h2 class="t-heading-lg section__title">Ícones</h2>
+    <p class="section__note">Traço de 1,5px, sem preenchimento, herdam <code>currentColor</code>. Tamanhos 16 / 20 / 24 / 32.</p>
+    <div class="row">
+      <svg class="icon icon--16 icon--ink" viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M6 13l6 6 6-6"/></svg>
+      <svg class="icon icon--20 icon--steel" viewBox="0 0 24 24"><path d="M12 19V5"/><path d="M6 11l6-6 6 6"/></svg>
+      <svg class="icon icon--24 icon--best" viewBox="0 0 24 24"><path d="M12 4l2.4 5 5.6.8-4 3.9 1 5.5-5-2.7-5 2.7 1-5.5-4-3.9 5.6-.8z"/></svg>
+      <svg class="icon icon--32 icon--rise" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16.5h.01"/></svg>
+      <svg class="icon icon--24 icon--drop" viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/></svg>
+      <svg class="icon icon--24 icon--ink" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M15.5 15.5 21 21"/></svg>
+    </div>
+  </section>
+
+  <footer class="section">
+    <hr class="divider">
+    <p class="t-caption t-steel">
+      home_shopper · design system — tokens em <code>design_system/tokens.css</code>, componentes em
+      <code>design_system/design-system.css</code>, origem e medições em <code>design_system/EXTRACTION.md</code>.
+      A camada de especificação é o <code>DESIGN.md</code> na raiz.
+    </p>
+  </footer>
+
+</main>
+</body>
+</html>
