@@ -72,6 +72,11 @@ home_shopper-db (real, pós-migração)
   purchase_notes=15  line_items=573  audit_log=588  sum(line_total)=<sum>
 ```
 
+> **Nota de 2026-10-05 (posterior ao DDL do internal task).** O bloco acima é o snapshot da
+> migração do banco e vale para aquela data. Depois do DDL, `presentations` = **384 formas** +
+> **393 mapeamentos** em `presentation_sources` — as 393 grafias continuam todas existindo. Ver
+> [`2026-10-05-ddl-apresentacoes-implementacao.md`](./2026-10-05-ddl-apresentacoes-implementacao.md) §3.
+
 Hash de **conteúdo por chave natural** (independente de UUID/`created_at`), `home_shopper` vs
 `home_shopper-db`:
 
@@ -100,7 +105,7 @@ alterado nem apagado.
 | `users` | 0 | 1 |
 | `stores` | 0 | 7 |
 | `products` | 0 | 384 |
-| `presentations` | 0 | 393 |
+| `presentations` | 0 | 393 *(→ 384 formas + 393 mapeamentos após o DDL de 05/10)* |
 | `purchase_notes` | 0 | **15** |
 | `line_items` | 0 | **573** |
 | `staging_receipts` / `staging_lines` | 0 / 0 | 0 / 0 |

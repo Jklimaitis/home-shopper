@@ -97,6 +97,12 @@ perdido:
 Se o coordenador preferir preservar literalmente 393, a alternativa é **adiar**
 `uk_presentations_form` — mas isso deixa o J1 sem a sua chave central.
 
+**Confirmado pelo Jonas em 2026-10-05 15:40 (-03):** mantém-se o **colapso das formas
+redundantes**. O critério de aceite passa a ser **384 formas comerciais + 393 mapeamentos de
+origem**, e não "393 presentations". A alternativa de adiar a chave fica registrada como
+**descartada** — ela não evitaria o colapso, apenas o adiaria, e deixaria o J1 sem o seu
+mecanismo central.
+
 ## 4. O que NÃO foi implementado
 
 - **`scripts/load_receipts.py` ainda escreve no modelo antigo** (insere em

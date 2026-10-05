@@ -47,6 +47,10 @@ decidir o valor das linhas existentes. `DEFAULT 'UNKNOWN'` + NOT NULL de uma vez
 porque `UNKNOWN` representa "ainda não interpretado"; backfill por parsing violaria a regra de não
 inventar, e a opção de duas etapas equivale a esta com refinamento posterior.
 
+> **Nota de 2026-10-05 (posterior ao DDL do internal task).** No momento da decisão a tabela tinha
+> 393 linhas; depois do DDL ela tem **384 formas** + **393 mapeamentos**. O `DEFAULT 'UNKNOWN'` +
+> NOT NULL foi aplicado na própria migração, como decidido.
+
 **J4 — uma semântica de venda por forma.** A forma tem **uma** semântica de venda; o rótulo muda por
 loja. Por isso `sale_unit_recognized` vive na forma e o `sale_unit` bruto permanece verbatim no
 mapeamento.
