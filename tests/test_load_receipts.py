@@ -239,6 +239,46 @@ class TestEmittedSql(unittest.TestCase):
         self.assertIn("GTIN observed: 1 line(s) accepted -> 1 distinct GTIN",
                       self.summary)
 
+    def test_review_and_provenance_columns_are_written(self):
+        # `db/006`: reviewed is written explicitly false (mechanical link) and
+        # the single origin lands in purchase_note_id + line_no.
+        self.assertIn(
+            "(presentation_id, gtin, reviewed, purchase_note_id, line_no)",
+            self.sql)
+        self.assertIn("false,", self.sql)
+        # The synthetic note is keyless: its origin resolves by natural key.
+        self.assertIn("AND access_key IS NULL", self.sql)
+        self.assertIn("AND purchase_date = '2026-01-02'", self.sql)
+        # The backfill updates provenance only -- never the gtin.
+        self.assertIn("DO UPDATE", self.sql)
+        self.assertIn("SET purchase_note_id = EXCLUDED.purchase_note_id", self.sql)
+        self.assertNotIn("SET gtin", self.sql)
+
+    def test_multi_origin_gtin_leaves_provenance_null(self):
+        # The same code on two lines of one note: a single pair would be an
+        # arbitrary pick, so both columns stay NULL and the gap is declared.
+        note = synthetic_note([
+            synthetic_item(1, "CARNE MOIDA 1KG", "Kg",
+                           observed_code="7891000412855"),
+            synthetic_item(2, "CARNE MOIDA 1KG", "Kg",
+                           observed_code="7891000412855"),
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "note.json"
+            path.write_text(json.dumps([note]), encoding="utf-8")
+            args = load_receipts.argparse.Namespace(
+                user_id="00000000-0000-0000-0000-0000000000cc",
+                user_name="Teste", user_email="teste@example.com",
+                transaction=True, dry_run=False,
+            )
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                sql = "\n".join(load_receipts.emit(
+                    load_receipts.load_notes(Path(tmp)), args))
+        self.assertIn("(v_presentation_id, '7891000412855', false, NULL, NULL)", sql)
+        self.assertIn("2 origins: provenance NULL, multi-valued", sql)
+        self.assertIn("1 multi-valued -> NULL", err.getvalue())
+
     def test_no_observed_code_means_no_identifier_section(self):
         # The other three lines have no `observed_code`: they must never
         # produce an identifier row.

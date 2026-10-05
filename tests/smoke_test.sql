@@ -485,6 +485,119 @@ SELECT 'N1' AS test,
             THEN 'PASS' ELSE 'FAIL' END AS result;
 
 -- -----------------------------------------------------------------------------
+-- N3: the identifier review flag and its provenance (internal task, `db/006`)
+-- -----------------------------------------------------------------------------
+-- `presentation_identifiers` used to hold only (id, presentation_id, gtin,
+-- created_at): the loader could not say whether a human had confirmed the link,
+-- nor on which line of which note the code was printed. `db/006` adds both. The
+-- provenance pair is all-or-nothing, and the FK clears the pointer when the note
+-- goes -- a dangling origin would be worse than no origin.
+\echo ''
+\echo '--- N3: GTIN review flag and provenance columns ---'
+DO $$
+DECLARE
+    v_pres  UUID;
+    v_prod  UUID;
+    v_user  UUID;
+    v_store UUID;
+    v_note  UUID;
+    v_ok    BOOLEAN;
+    v_pass  BOOLEAN := true;
+BEGIN
+    SELECT presentation_id INTO v_pres
+      FROM presentation_sources WHERE description_raw LIKE 'KANI%';
+    SELECT product_id INTO v_prod FROM presentations WHERE id = v_pres;
+    SELECT n.user_id, n.store_id INTO v_user, v_store
+      FROM purchase_notes n LIMIT 1;
+
+    -- A note WITH a line: before 006 an identifier could point at neither, and
+    -- the origin has to be a real line, not just a plausible number.
+    INSERT INTO purchase_notes (user_id, store_id, purchase_date, amount_paid)
+        VALUES (v_user, v_store, CURRENT_DATE, 7.77)
+        RETURNING id INTO v_note;
+    INSERT INTO line_items (note_id, product_id, presentation_id, line_no,
+                            unit_price, quantity, line_total)
+        VALUES (v_note, v_prod, v_pres, 3, 10.00, 1, 10.00);
+
+    -- The link is mechanical: `reviewed` defaults to false, never true.
+    INSERT INTO presentation_identifiers
+        (presentation_id, gtin, purchase_note_id, line_no)
+        VALUES (v_pres, '7891000100104', v_note, 3);
+    v_ok := NOT (SELECT reviewed FROM presentation_identifiers
+                  WHERE gtin = '7891000100104');
+    RAISE NOTICE 'N3 reviewed defaults to false    : %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    -- A note with no line, or a line with no note, is a half-truth: refused.
+    v_ok := false;
+    BEGIN
+        INSERT INTO presentation_identifiers
+            (presentation_id, gtin, purchase_note_id, line_no)
+            VALUES (v_pres, '7891000100105', v_note, NULL);
+    EXCEPTION WHEN check_violation THEN v_ok := true;
+    END;
+    RAISE NOTICE 'N3 note without a line refused   : %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    -- line_items numbers from 1; 0 is not a line.
+    v_ok := false;
+    BEGIN
+        INSERT INTO presentation_identifiers
+            (presentation_id, gtin, purchase_note_id, line_no)
+            VALUES (v_pres, '7891000100106', v_note, 0);
+    EXCEPTION WHEN check_violation THEN v_ok := true;
+    END;
+    RAISE NOTICE 'N3 line 0 refused                : %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    -- A line the note does not have is not an origin: the FK refuses it.
+    v_ok := false;
+    BEGIN
+        INSERT INTO presentation_identifiers
+            (presentation_id, gtin, purchase_note_id, line_no)
+            VALUES (v_pres, '7891000100107', v_note, 99);
+    EXCEPTION WHEN foreign_key_violation THEN v_ok := true;
+    END;
+    RAISE NOTICE 'N3 invented line refused         : %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    -- Removing the note cascades to its lines, which clears BOTH provenance
+    -- columns at once -- the identifier survives, only its origin is gone.
+    DELETE FROM purchase_notes WHERE id = v_note;
+    v_ok := (SELECT count(*) FROM presentation_identifiers
+              WHERE gtin = '7891000100104'
+                AND purchase_note_id IS NULL AND line_no IS NULL) = 1;
+    RAISE NOTICE 'N3 note delete clears provenance : %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    IF v_pass THEN
+        RAISE NOTICE 'N3 RESULT: PASS (review flag and provenance in place)';
+    ELSE
+        RAISE NOTICE 'N3 RESULT: FAIL';
+    END IF;
+END $$;
+
+SELECT 'N3' AS test,
+       (SELECT count(*) FROM information_schema.columns
+         WHERE table_name='presentation_identifiers'
+           AND column_name IN ('reviewed','purchase_note_id','line_no')) AS new_columns,
+       (SELECT count(*) FROM pg_constraint WHERE conname IN
+           ('fk_presentation_identifiers_origin','ck_presentation_identifiers_provenance',
+            'ck_presentation_identifiers_line_no')) AS new_constraints,
+       CASE WHEN (SELECT count(*) FROM information_schema.columns
+                   WHERE table_name='presentation_identifiers'
+                     AND column_name IN ('reviewed','purchase_note_id','line_no')) = 3
+             AND (SELECT count(*) FROM pg_constraint WHERE conname IN
+                   ('fk_presentation_identifiers_origin','ck_presentation_identifiers_provenance',
+                    'ck_presentation_identifiers_line_no')) = 3
+            THEN 'PASS' ELSE 'FAIL' END AS result;
+
+-- -----------------------------------------------------------------------------
 -- N2: purchase_notes is immutable, except the staging link (internal task, C2)
 -- -----------------------------------------------------------------------------
 -- The design was decided before but never exercised: an earlier probe ran

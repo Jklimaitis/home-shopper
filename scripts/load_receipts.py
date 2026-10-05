@@ -101,10 +101,25 @@ line derives. The association is resolved AFTER every form is created, by the
 same tuple the line used, so the section loads both on a fresh base and on one
 already loaded (where the note insert is skipped). One row per distinct GTIN
 (`uk_presentation_identifiers_gtin`); a code observed on several lines yields
-one row and the surplus is reported as duplicates. The table has no
-`reviewed`/provenance column -- the link is mechanical by construction -- so
-the provenance (note label, line number) is carried in the generated SQL
-comments rather than in a column that does not exist.
+one row and the surplus is reported as duplicates.
+
+The row also carries its REVIEW state and its PROVENANCE (`db/006`, internal task):
+
+  * `reviewed` is written explicitly as `false`. The link the loader derives is
+    mechanical, so a human has not confirmed it; only a human may set it true,
+    and a re-run never resets it (`DO UPDATE` leaves the column alone). This is
+    the same criterion `presentation_sources.reviewed` already uses.
+  * `purchase_note_id` + `line_no` are the literal origin: the note the code was
+    printed on and the line within it. They are filled ONLY when the origin is a
+    SINGLE unambiguous `(note, line)`. When a code was observed on several lines
+    (2 to 8 literal pairs, sometimes on different notes) a single pair would be
+    an arbitrary pick, so both columns stay NULL and the loader reports the gap.
+    The complete set lives in the generated SQL comment above each value; making
+    it durable needs the child table the migration header describes.
+
+A re-run is still idempotent, and now it BACKFILLS: `ON CONFLICT ... DO UPDATE`
+makes the provenance land on rows that already exist (the 129 loaded by
+internal task) without touching `gtin` or `presentation_id`.
 
 What the loader deliberately does NOT write
 -------------------------------------------
@@ -327,6 +342,46 @@ def sql_literal(value: str | None) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
+def note_identity(note: dict) -> tuple:
+    """What identifies a note for provenance: its key, or its natural key.
+
+    The access key is unique when present (`uk` partial index); a hand-typed
+    note has none, so its `(store, date, amount)` is the identity the loader
+    itself guards on. Used to tell whether two observed lines belong to the SAME
+    note, not to look anything up.
+    """
+    key = access_key(note)
+    if key is not None:
+        return ("access_key", key)
+    return ("natural", only_digits(note.get("issuer_cnpj")), iso_date(note),
+            amount_paid(note))
+
+
+def note_id_sql(note: dict, args: argparse.Namespace) -> str:
+    """Scalar subquery resolving the note's `id`, by the same key it was loaded.
+
+    The identifier section runs after every note is inserted, so the row exists
+    and this returns its id. It returns NULL only if the note was never loaded
+    (in which case the provenance column honestly stays NULL too).
+    """
+    key = access_key(note)
+    if key is not None:
+        return (
+            "(SELECT id FROM purchase_notes"
+            f" WHERE user_id = {sql_literal(args.user_id)}"
+            f" AND access_key = {sql_literal(key)})"
+        )
+    cnpj = only_digits(note.get("issuer_cnpj"))
+    return (
+        "(SELECT id FROM purchase_notes"
+        f" WHERE user_id = {sql_literal(args.user_id)}"
+        " AND access_key IS NULL"
+        f" AND store_id = (SELECT id FROM stores WHERE cnpj = {sql_literal(cnpj)})"
+        f" AND purchase_date = {sql_literal(iso_date(note))}"
+        f" AND amount_paid = {amount_paid(note)})"
+    )
+
+
 def load_notes(source_dir: Path) -> list[dict]:
     notes: list[dict] = []
     for path in sorted(glob.glob(os.path.join(str(source_dir), "**", "*.json"), recursive=True)):
@@ -377,9 +432,12 @@ def emit(notes: list[dict], args: argparse.Namespace) -> list[str]:
     gtin_rejections: Counter = Counter()
     gtin_accepted_lines = 0
     gtin_form_of: dict[str, tuple] = {}
-    gtin_provenance: dict[str, list[tuple[str, int]]] = {}
+    # gtin -> the literal (label, line_no, note) origins it was declared on.
+    gtin_provenance: dict[str, list[tuple[str, int, dict]]] = {}
     gtin_by_form: dict[tuple, list[str]] = {}
     gtin_conflicts: list[tuple[str, ...]] = []
+    # GTINs whose literal origin is multi-valued: provenance columns stay NULL.
+    gtin_multi_origin: list[tuple[str, int]] = []
 
     for note in notes:
         cnpj = only_digits(note.get("issuer_cnpj"))
@@ -488,7 +546,7 @@ def emit(notes: list[dict], args: argparse.Namespace) -> list[str]:
                         # stored -- refuse rather than silently pick one.
                         gtin_conflicts.append((gtin, known[0], form_key[0]))
                     gtin_provenance.setdefault(gtin, []).append(
-                        (label, int(item["line_no"]))
+                        (label, int(item["line_no"]), note)
                     )
             pack_sql = "NULL" if multipack is None else str(multipack)
             out.append(
@@ -544,15 +602,20 @@ def emit(notes: list[dict], args: argparse.Namespace) -> list[str]:
     if gtin_by_form:
         out.append(
             "-- ---------------------------------------------------------------------------\n"
-            "-- presentation_identifiers -- observed GTINs (J2)\n"
+            "-- presentation_identifiers -- observed GTINs (J2) + review/provenance (006)\n"
             "--\n"
             "-- Only codes that are a REAL GTIN: format `^[0-9]{8,14}$` AND a GTIN length\n"
             "-- (8/12/13/14) AND a correct GS1 mod-10 check digit. Nothing is padded,\n"
             "-- completed or inferred; a code that fails stays only in the private source.\n"
             "-- Each is tied to the form its line derived, resolved by the same tuple, so\n"
             "-- this section also loads onto an already-loaded base. One row per distinct\n"
-            "-- GTIN (`uk_presentation_identifiers_gtin`); provenance (note, line) is in the\n"
-            "-- comment above each value."
+            "-- GTIN (`uk_presentation_identifiers_gtin`).\n"
+            "--\n"
+            "-- `reviewed` is written `false`: the link is mechanical, not human-confirmed.\n"
+            "-- `purchase_note_id`/`line_no` carry the literal origin ONLY when it is a\n"
+            "-- single (note, line); a code observed on several lines leaves them NULL and\n"
+            "-- the full set stays in the comment above the value. `DO UPDATE` backfills\n"
+            "-- provenance onto rows that already exist without touching `gtin`."
         )
     for form_key, gtins in sorted(gtin_by_form.items(), key=lambda kv: kv[0][0]):
         desc_search, recognized, container, multipack = form_key
@@ -576,18 +639,36 @@ def emit(notes: list[dict], args: argparse.Namespace) -> list[str]:
             f"{sql_literal(desc_search)};",
             "    ELSE",
         ]
+        rows: list[str] = []
         for gtin in sorted(gtins):
-            provenance = ", ".join(
-                f"{lab} line {ln}" for lab, ln in gtin_provenance.get(gtin, [])
-            )
-            block.append(f"        -- {gtin} from {provenance}")
+            origins = gtin_provenance.get(gtin, [])
+            distinct = {(note_identity(n), ln) for _, ln, n in origins}
+            described = ", ".join(f"{lab} line {ln}" for lab, ln, _ in origins)
+            if len(distinct) == 1:
+                label, line_no, origin_note = origins[0]
+                block.append(f"        -- {gtin} from {label} line {line_no}")
+                rows.append(
+                    f"            (v_presentation_id, {sql_literal(gtin)}, false,\n"
+                    f"             {note_id_sql(origin_note, args)}, {line_no})"
+                )
+            else:
+                # Several literal origins: a single pair would be an arbitrary
+                # pick, so it is not stored -- the gap is declared instead.
+                gtin_multi_origin.append((gtin, len(distinct)))
+                block.append(
+                    f"        -- {gtin} from {described} "
+                    f"({len(distinct)} origins: provenance NULL, multi-valued)"
+                )
+                rows.append(
+                    f"            (v_presentation_id, {sql_literal(gtin)}, false, NULL, NULL)"
+                )
         block += [
-            "        INSERT INTO presentation_identifiers (presentation_id, gtin) VALUES",
-            ",\n".join(
-                f"            (v_presentation_id, {sql_literal(g)})"
-                for g in sorted(gtins)
-            ),
-            "        ON CONFLICT ON CONSTRAINT uk_presentation_identifiers_gtin DO NOTHING;",
+            "        INSERT INTO presentation_identifiers",
+            "            (presentation_id, gtin, reviewed, purchase_note_id, line_no) VALUES",
+            ",\n".join(rows),
+            "        ON CONFLICT ON CONSTRAINT uk_presentation_identifiers_gtin DO UPDATE",
+            "            SET purchase_note_id = EXCLUDED.purchase_note_id,",
+            "                line_no = EXCLUDED.line_no;",
             "    END IF;",
             "END $$;",
         ]
@@ -633,6 +714,21 @@ def emit(notes: list[dict], args: argparse.Namespace) -> list[str]:
             print(
                 f"#   duplicate line occurrences collapsed: "
                 f"{gtin_accepted_lines - accepted_gtins}",
+                file=sys.stderr,
+            )
+        # Provenance: how many rows the loader can pin to ONE (note, line).
+        pinned = accepted_gtins - len(gtin_multi_origin)
+        print(
+            f"#   provenance: {pinned} of {accepted_gtins} pinned to a single "
+            f"(note, line); {len(gtin_multi_origin)} multi-valued -> NULL, "
+            f"gap declared",
+            file=sys.stderr,
+        )
+        if gtin_multi_origin:
+            lost = sum(count for _, count in gtin_multi_origin)
+            print(
+                f"#     {lost} literal origins not storable as one pair: "
+                + ", ".join(f"{g}({n})" for g, n in sorted(gtin_multi_origin)),
                 file=sys.stderr,
             )
         if gtin_rejections:
