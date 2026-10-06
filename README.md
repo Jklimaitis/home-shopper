@@ -35,7 +35,7 @@ CNPJs, so it is not an identity either. Real identity is
 ## Current state
 
 ```
-14 tables · 5 views · 48 indexes · 14 triggers · 4 enums
+20 tables · 8 views · 67 indexes · 22 triggers · 8 enums
 ```
 
 Built on PostgreSQL 16 and verified by domain tests that use a NFC-e
@@ -222,6 +222,10 @@ Real secrets live in `.env` (see `.env.example`), never in code.
 ## Documentation
 
 - [`docs/ERD.md`](docs/ERD.md) — Mermaid diagram and the central decisions
+- [`docs/lgpd/retention-policy.md`](docs/lgpd/retention-policy.md) — LGPD retention terms, per
+  column: purpose, legal basis, window, and the jobs that execute them
+- [`docs/lgpd/titular-rights.md`](docs/lgpd/titular-rights.md) — data-subject channel,
+  response deadlines and the erasure procedure (order matters)
 - `docs/DECISIONS.md` — ADRs (planned)
 
 ---

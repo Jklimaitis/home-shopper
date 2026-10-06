@@ -1,8 +1,20 @@
 # ERD — home_shopper
 
-Generated from the schema applied on PostgreSQL 16: **14 tables, 5 views,
-48 indexes, 14 triggers, 4 enums**. Every constraint is named
-(`pk_`, `fk_`, `uk_`, `ck_`).
+Generated from the schema applied on PostgreSQL 16: **20 tables, 8 views,
+67 indexes, 22 triggers, 8 enums**. Measured on **2026-10-05** in a disposable
+database that applied `db/001_schema.sql` … `db/013_price_refs_sample_count.sql`
+in order (`information_schema.tables`, `information_schema.views`, `pg_indexes`,
+`information_schema.triggers`, `pg_type`/`pg_enum` in schema `public`), and
+reproduced identically on a clone of the canonical data. Every constraint is
+named (`pk_`, `fk_`, `uk_`, `ck_`).
+
+This diagram documents what is **implemented** (`db/001`–`db/013`). Migrations
+`db/007`–`db/013` — category attributes and rules, the review decision on
+`staging_lines`, catalogue write requests, the LGPD retention register, the
+catalogue coverage after an erasure, the `users.email` constraints and
+`price_refs.samples_30d` — are integrated into that chain. The entity boxes below
+still cover the `db/001`–`db/006` base; the structures added since are specified
+in the migration files and in `<internal review>`.
 
 ```mermaid
 erDiagram
@@ -17,7 +29,7 @@ erDiagram
 
     stores {
         uuid      id PK
-        text      name
+        text      name "legal name"
         char14    cnpj UK
         char7     ibge_code "IBGE municipality"
         text      trade_name
@@ -36,7 +48,6 @@ erDiagram
         text      name
         uuid      category_id FK
         text      brand "nullable: fresh produce"
-        text      ean UK "partial index, 0 of 42 real items"
         enum      base_unit "UN, G, ML -- smallest unit only"
         timestamptz created_at
         timestamptz updated_at
@@ -53,12 +64,38 @@ erDiagram
     presentations {
         uuid      id PK
         uuid      product_id FK
-        text      sale_unit "UN, CX, KG, PC as printed"
-        numeric   factor_base "base units per sale_unit"
-        text      description_raw "as printed on the receipt"
-        text      description_norm "lowercased"
-        text      match_key "generated"
+        enum      content_kind "FIXED, VARIABLE, UNKNOWN"
+        numeric   content_quantity "only when FIXED"
+        enum      content_unit "UN, G, ML -- reuses base_unit"
+        enum      container_type "cx, pc, pct, sc, lt, un"
+        integer   multipack_quantity "NULL or > 1"
+        enum      sale_unit_recognized "controlled vocabulary"
+        numeric   factor_base "base units per sale unit"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    presentation_sources {
+        uuid      id PK
+        uuid      presentation_id FK
         uuid      store_id FK "null = global wording"
+        text      sale_unit "verbatim from the receipt"
+        text      description_raw "verbatim"
+        text      description_search "the one derived search form"
+        text      match_key "generated from description_search"
+        enum      match_source "BARCODE, DESCRIPTION, ALIAS, MANUAL, NONE"
+        boolean   reviewed "human-confirmed link"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    presentation_identifiers {
+        uuid      id PK
+        uuid      presentation_id FK
+        text      gtin UK "GTIN-8/12/13/14, check digit at load time"
+        boolean   reviewed "human-confirmed link"
+        uuid      purchase_note_id FK "origin, NULL when multi-valued"
+        smallint  line_no FK "origin, NULL when multi-valued"
         timestamptz created_at
     }
 
@@ -89,7 +126,7 @@ erDiagram
         smallint  line_no
         text      description_raw
         text      store_code "emitter's 7-digit code, search aid only"
-        text      sale_unit
+        text      sale_unit "verbatim, only non-blank"
         numeric   quantity
         numeric   unit_price
         numeric   discount_line
@@ -141,7 +178,8 @@ erDiagram
         enum      base_unit
         numeric   min_30d
         numeric   max_30d
-        numeric   var_pct_30d
+        numeric   var_pct_30d "NULL: ADR-0003 does not define the formula"
+        integer   samples_30d "aggregated points in the 30d window"
         timestamptz updated_at
     }
 
@@ -190,7 +228,7 @@ erDiagram
 
     stores ||--o{ purchase_notes : "issues"
     stores ||--o{ staging_receipts : "identified in"
-    stores ||--o{ presentations : "has own wording for"
+    stores ||--o{ presentation_sources : "writes the wording"
     stores ||--o{ price_refs : "price observed at"
 
     categories ||--o{ categories : "contains"
@@ -202,8 +240,12 @@ erDiagram
     products ||--o{ price_refs : "monitored"
     products ||--o{ price_alerts : "alerts about"
 
+    presentations ||--o{ presentation_sources : "is worded as"
+    presentations ||--o{ presentation_identifiers : "is coded as"
     presentations ||--o{ line_items : "unit charged"
     presentations ||--o{ staging_lines : "unit observed"
+
+    line_items ||--o{ presentation_identifiers : "line that declared it"
 
     staging_receipts ||--o{ staging_lines : "raw lines"
     staging_receipts |o--o| purchase_notes : "becomes a reviewed note"
@@ -215,36 +257,45 @@ erDiagram
 
 ## The three decisions the diagram makes visible
 
-**1. `presentations` fuses the lookup table with the unit conversion.**
-The truncated receipt description (`LEITE UHT HERC CX 12UN`) already carries how
-many base units the pack holds. Splitting "alias" from "conversion factor"
-into two tables would duplicate the data and let the two drift apart.
+**1. The commercial form is separate from the store's wording.**
+`presentations` is the **form**: product, content, packaging, multipack, factor
+and the recognised sale unit — independent of store. `presentation_sources` is
+the per-store **mapping**: the verbatim text and sale unit a store prints,
+pointing at one form. Two stores that word the same form differently produce two
+source rows and **one** form; the uniqueness key is on the form
+(`uk_presentations_form`), not on the word, so the same commercial form is never
+duplicated just because a description changed.
 
-**There is no store-internal product code.** The 7-digit code on the receipt
-belongs to the *emitter*: the same cut of beef carries a different code at
-every CNPJ, and this project exists to compare **between** stores. A matching
-key that changes between the stores you want to compare is not a key — it is
-confident noise. The code lives in `staging_lines`, where it speeds up
-capture, and is never propagated.
+`presentation_identifiers` holds **N GTINs per presentation**. A single
+`products.ean` column was the wrong level (one product can carry different codes
+per presentation) and was removed in `db/005`; the code is global to one
+commercial item, so its uniqueness is over `gtin` alone.
 
-**2. `base_price` is derived, never typed.**
+**2. There is no store-internal product code.**
+The 7-digit code on the receipt belongs to the *emitter*: the same cut of beef
+carries a different code at every CNPJ, and this project exists to compare
+**between** stores. A matching key that changes between the stores you want to
+compare is not a key — it is confident noise. The code lives in `staging_lines`,
+where it speeds up capture, and is never propagated.
+
+**3. `base_price` is derived, never typed.**
 The trigger `tr_line_items_base_price` computes `unit_price / factor_base` and
 **refuses** the row when the presentation is unresolved. That is what stops a
 250 g pack and a 1 kg pack from being compared as if they were the same thing.
-
-**3. Staging has its own lifecycle.**
-`staging_receipts` → `staging_lines` → *[human review]* → `purchase_notes` →
-`line_items`. Nothing reaches the trusted layer without review, and the
-original staging receipt is preserved (`ON DELETE SET NULL`).
+The factor lives **only** on the form, so there is no second copy to drift.
 
 ## Things to watch when implementing
 
 | Point | Why |
 |---|---|
 | `line_items.presentation_id` is `NOT NULL` | Without it there is no conversion basis; the trigger raises rather than storing an uncomparable price. |
+| `fk_line_items_presentation` / `fk_staging_lines_presentation` are **composite** `(presentation_id, product_id)` | The database itself guarantees the presentation belongs to the stated product. `line_items` is `RESTRICT`; `staging_lines` is `SET NULL` (staging is where the matcher errs). |
 | `access_key` has a partial unique index | One NFC-e per user. Reprocessing a receipt — job retry, re-import — does not duplicate. |
-| `uk_products_ean` is partial (`WHERE ean IS NOT NULL`) | Allows many products without an EAN, the common case for fresh produce. |
+| `uk_presentations_form` uses `NULLS NOT DISTINCT` | `content_quantity IS NULL` (VARIABLE/UNKNOWN) is a value; without this, one form could exist N times. |
+| `ck_presentations_content` ties quantity to kind | `content_quantity` is non-null **if and only if** `content_kind = 'FIXED'`. Zero is never used for "absent". |
 | `uk_products_name_brand` uses `NULLS NOT DISTINCT` | `brand IS NULL` is the normal case; without this, "CUPIM COMBO" could exist N times. |
+| `presentation_sources.sale_unit` only checks non-blank | The raw receipt label (`CX 10`, `c/N`, `FRASCO`) is a fiscal fact, not a schema error. The controlled value is `presentations.sale_unit_recognized`. |
+| `presentation_identifiers` provenance is one composite FK | `(purchase_note_id, line_no) → line_items(note_id, line_no)` so a note delete clears **both** columns at once; `ck_presentation_identifiers_provenance` forbids a half-truth. |
 | `data_erasure_requests.user_id` has **no** FK | Intentionally: the record must survive the `DELETE` it documents. |
 | `audit_log.user_id` has **no** FK | Same reason. With an FK, erasing a user aborts — reproduced before the fix. |
 | `user_id` on `staging_receipts`, `purchase_notes`, `price_refs`, `price_alerts` | Tenant isolation. Every query filters on it. |

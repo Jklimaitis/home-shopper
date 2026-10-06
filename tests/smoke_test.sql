@@ -598,6 +598,567 @@ SELECT 'N3' AS test,
             THEN 'PASS' ELSE 'FAIL' END AS result;
 
 -- -----------------------------------------------------------------------------
+-- N4: the review decision on staging_lines (internal task, `db/008`)
+-- -----------------------------------------------------------------------------
+-- PENDING / CONFIRMED / NO_MATCH / SKIPPED. Before 008, "never reviewed" and
+-- "reviewed, no match" collapsed into product_id IS NULL, match_source='NONE',
+-- and "deferred" had no representation at all. This block checks the states are
+-- enforced, that neither of the two new conclusions moves total_computed, and
+-- that a deferred line comes back in the queue. Runs before N2, which has to be
+-- the last block before ROLLBACK.
+\echo ''
+\echo '--- N4: review_state -- the decision column ---'
+DO $$
+DECLARE
+    v_user  UUID;
+    v_store UUID;
+    v_rec   UUID;
+    v_prod  UUID;
+    v_pres  UUID;
+    v_t0    NUMERIC;
+    v_t1    NUMERIC;
+    v_rec2  RECORD;
+    v_ok    BOOLEAN;
+    v_pass  BOOLEAN := true;
+    -- (8)
+    v_prod2 UUID;
+    v_pres2 UUID;
+    v_line3 UUID;
+BEGIN
+    SELECT id INTO v_user  FROM users  ORDER BY created_at LIMIT 1;
+    SELECT id INTO v_store FROM stores ORDER BY created_at LIMIT 1;
+    SELECT p.id, pr.id INTO v_prod, v_pres
+      FROM products p JOIN presentations pr ON pr.product_id = p.id
+     WHERE p.name = 'Surimi sticks Swift' LIMIT 1;
+
+    INSERT INTO staging_receipts (user_id, source, store_id,
+                                  total_gross, discount_total, amount_paid)
+        VALUES (v_user, 'MANUAL', v_store, 30.00, 0.00, 30.00)
+        RETURNING id INTO v_rec;
+    INSERT INTO staging_lines (receipt_id, line_no, description_raw, sale_unit,
+                               quantity, unit_price, line_total)
+        VALUES (v_rec, 1, 'LINHA PENDENTE', 'pc', 1, 10.00, 10.00),
+               (v_rec, 2, 'LINHA SEM CANDIDATO', 'pc', 1, 20.00, 20.00);
+
+    -- (1) a new line is PENDING and not reviewed.
+    v_ok := (SELECT count(*) FROM staging_lines
+              WHERE receipt_id = v_rec AND review_state = 'PENDING'
+                AND NOT reviewed) = 2;
+    RAISE NOTICE 'N4 new lines are PENDING              : %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    SELECT total_computed INTO v_t0 FROM staging_receipts WHERE id = v_rec;
+
+    -- (2) CONFIRMED without a link is refused: it would collapse back into
+    --     NO_MATCH, the exact state the column exists to separate.
+    v_ok := false;
+    BEGIN
+        UPDATE staging_lines SET review_state = 'CONFIRMED', reviewed = TRUE
+         WHERE receipt_id = v_rec AND line_no = 1;
+    EXCEPTION WHEN check_violation THEN v_ok := true;
+    END;
+    RAISE NOTICE 'N4 CONFIRMED without a link refused   : %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    -- (3) CONFIRMED with the real link is accepted (reviewed travels with it).
+    UPDATE staging_lines SET product_id = v_prod, presentation_id = v_pres,
+                             match_source = 'MANUAL',
+                             review_state = 'CONFIRMED', reviewed = TRUE
+     WHERE receipt_id = v_rec AND line_no = 1;
+    v_ok := (SELECT review_state = 'CONFIRMED' AND reviewed
+               FROM staging_lines WHERE receipt_id = v_rec AND line_no = 1);
+    RAISE NOTICE 'N4 CONFIRMED with the link accepted   : %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    -- (4) "not any" without a reason is refused (PRD F09: motivo em match_note).
+    v_ok := false;
+    BEGIN
+        UPDATE staging_lines SET review_state = 'NO_MATCH', reviewed = TRUE
+         WHERE receipt_id = v_rec AND line_no = 2;
+    EXCEPTION WHEN check_violation THEN v_ok := true;
+    END;
+    RAISE NOTICE 'N4 NO_MATCH without a reason refused  : %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    -- (5) "not any" with a reason is accepted and leaves the queue.
+    UPDATE staging_lines SET review_state = 'NO_MATCH', reviewed = TRUE,
+                             match_note = 'nenhum candidato serve'
+     WHERE receipt_id = v_rec AND line_no = 2;
+
+    -- (6) deferred: reviewed stays FALSE and the line RETURNS to the queue.
+    UPDATE staging_lines SET review_state = 'SKIPPED', reviewed = FALSE
+     WHERE receipt_id = v_rec AND line_no = 1;
+    SELECT * INTO v_rec2 FROM v_review_queue WHERE staging_receipt_id = v_rec;
+    v_ok := (SELECT review_state = 'SKIPPED' AND NOT reviewed
+               FROM staging_lines WHERE receipt_id = v_rec AND line_no = 1)
+            AND v_rec2.lines_to_review = 1
+            AND v_rec2.lines_skipped = 1;
+    RAISE NOTICE 'N4 SKIPPED re-enters the queue        : % (to_review=%, skipped=%)',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END,
+        v_rec2.lines_to_review, v_rec2.lines_skipped;
+    v_pass := v_pass AND v_ok;
+
+    -- (7) neither state moved the receipt's computed total: review_state is a
+    --     decision, not a value of the line.
+    SELECT total_computed INTO v_t1 FROM staging_receipts WHERE id = v_rec;
+    v_ok := (v_t0 = v_t1) AND v_t1 = 30.00;
+    RAISE NOTICE 'N4 total_computed untouched by states : % (% = %)',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END, v_t0, v_t1;
+    v_pass := v_pass AND v_ok;
+
+    -- (8) deleting the product a CONFIRMED line points at must not abort on
+    --     ck_staging_lines_confirmed: ON DELETE SET NULL unlinks the line and
+    --     it drops back to PENDING (needs review again).
+    v_ok := false;
+    BEGIN
+        INSERT INTO products (name, base_unit) VALUES ('Throwaway unlink test', 'G')
+            RETURNING id INTO v_prod2;
+        INSERT INTO presentations (product_id, factor_base)
+            VALUES (v_prod2, 1000) RETURNING id INTO v_pres2;
+        INSERT INTO staging_lines (receipt_id, line_no, description_raw, sale_unit,
+                                   quantity, unit_price, line_total,
+                                   product_id, presentation_id, match_source,
+                                   reviewed, review_state)
+            VALUES (v_rec, 3, 'LINHA CONFIRMADA', 'pc', 1, 1.00, 1.00,
+                    v_prod2, v_pres2, 'MANUAL', TRUE, 'CONFIRMED')
+            RETURNING id INTO v_line3;
+        DELETE FROM products WHERE id = v_prod2;
+        v_ok := (SELECT review_state = 'PENDING' AND NOT reviewed
+                          AND product_id IS NULL
+                   FROM staging_lines WHERE id = v_line3);
+    EXCEPTION WHEN others THEN v_ok := false;
+    END;
+    RAISE NOTICE 'N4 unlinked CONFIRMED demoted to PENDING: %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    IF v_pass THEN
+        RAISE NOTICE 'N4 RESULT: PASS (review decision column in place)';
+    ELSE
+        RAISE NOTICE 'N4 RESULT: FAIL';
+    END IF;
+END $$;
+
+SELECT 'N4' AS test,
+       enum_range(NULL::review_state)::text[] AS review_states,
+       (SELECT count(*) FROM pg_constraint WHERE conname IN
+           ('ck_staging_lines_review_state_reviewed','ck_staging_lines_confirmed',
+            'ck_staging_lines_no_match')) AS state_constraints,
+       CASE WHEN enum_range(NULL::review_state)::text[]
+                 = ARRAY['PENDING','CONFIRMED','NO_MATCH','SKIPPED']
+             AND (SELECT count(*) FROM pg_constraint WHERE conname IN
+                   ('ck_staging_lines_review_state_reviewed','ck_staging_lines_confirmed',
+                    'ck_staging_lines_no_match')) = 3
+            THEN 'PASS' ELSE 'FAIL' END AS result;
+
+-- -----------------------------------------------------------------------------
+-- N5: catalogue write requests -- intake with approval (internal task, `db/009`)
+-- -----------------------------------------------------------------------------
+-- The shared catalogue is written ONLY through a request a data owner/steward
+-- approves (form 1). The gate is enforced by constraints, not by convention:
+-- an APPROVED row cannot exist without a reviewer, an OPEN row cannot carry
+-- one, and the payload may not smuggle personal data into the shared catalogue.
+-- The requester's provenance survives an LGPD erasure, and the reviewer is
+-- actor metadata with NO FK -- so deleting the reviewer cannot falsify an
+-- approval.
+\echo ''
+\echo '--- N5: catalogue write requests (intake + approval) ---'
+DO $$
+DECLARE
+    v_user     UUID;
+    v_reviewer UUID;
+    v_req      UUID;
+    v_email    TEXT := 'requester@example.com';
+    v_ok       BOOLEAN;
+    v_pass     BOOLEAN := true;
+BEGIN
+    INSERT INTO users (name, email) VALUES ('Requester Test', v_email)
+        RETURNING id INTO v_user;
+    INSERT INTO users (name, email) VALUES ('Reviewer Test', 'reviewer@example.com')
+        RETURNING id INTO v_reviewer;
+
+    -- A well-formed OPEN request is accepted.
+    INSERT INTO catalog_write_requests
+        (requested_by, requested_by_email, kind, payload, justification)
+        VALUES (v_user, v_email, 'PRODUCT',
+                '{"name":"Ground coffee 500 g","brand":"Cafe"}'::jsonb,
+                'not in the catalogue yet')
+        RETURNING id INTO v_req;
+
+    -- OPEN with a reviewer is a half-decision: refused.
+    v_ok := false;
+    BEGIN
+        INSERT INTO catalog_write_requests
+            (requested_by, requested_by_email, kind, payload, status, reviewed_by)
+            VALUES (v_user, v_email, 'SYNONYM', '{"term":"moida"}'::jsonb,
+                    'OPEN', v_reviewer);
+    EXCEPTION WHEN check_violation THEN v_ok := true;
+    END;
+    RAISE NOTICE 'N5 OPEN with reviewer refused     : %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    -- APPROVED without a reviewer is refused.
+    v_ok := false;
+    BEGIN
+        INSERT INTO catalog_write_requests
+            (requested_by, requested_by_email, kind, payload, status, decided_at)
+            VALUES (v_user, v_email, 'SYNONYM', '{"term":"moida"}'::jsonb,
+                    'APPROVED', now());
+    EXCEPTION WHEN check_violation THEN v_ok := true;
+    END;
+    RAISE NOTICE 'N5 APPROVED without reviewer      : %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    -- APPROVED without a decision time is refused too.
+    v_ok := false;
+    BEGIN
+        INSERT INTO catalog_write_requests
+            (requested_by, requested_by_email, kind, payload, status, reviewed_by)
+            VALUES (v_user, v_email, 'SYNONYM', '{"term":"moida"}'::jsonb,
+                    'APPROVED', v_reviewer);
+    EXCEPTION WHEN check_violation THEN v_ok := true;
+    END;
+    RAISE NOTICE 'N5 APPROVED without decided_at    : %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    -- An ADJUSTMENT must name the row it adjusts.
+    v_ok := false;
+    BEGIN
+        INSERT INTO catalog_write_requests
+            (requested_by, requested_by_email, kind, payload)
+            VALUES (v_user, v_email, 'ADJUSTMENT', '{"factor_base":1000}'::jsonb);
+    EXCEPTION WHEN check_violation THEN v_ok := true;
+    END;
+    RAISE NOTICE 'N5 ADJUSTMENT without target      : %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    -- Personal data must never enter the shared payload. The strings are BUILT,
+    -- not literal: a literal 11- or 44-digit run in this file would trip
+    -- scripts/guard_dados_sensiveis.py -- the very guard the card says must keep
+    -- passing.
+    v_ok := false;
+    BEGIN
+        INSERT INTO catalog_write_requests
+            (requested_by, requested_by_email, kind, payload)
+            VALUES (v_user, v_email, 'PRODUCT',
+                    jsonb_build_object('note', 'falar com joao@example.com'));
+    EXCEPTION WHEN check_violation THEN v_ok := true;
+    END;
+    RAISE NOTICE 'N5 payload with e-mail refused    : %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    v_ok := false;
+    BEGIN
+        INSERT INTO catalog_write_requests
+            (requested_by, requested_by_email, kind, payload)
+            VALUES (v_user, v_email, 'PRODUCT',
+                    jsonb_build_object('cpf', repeat('1', 11)));
+    EXCEPTION WHEN check_violation THEN v_ok := true;
+    END;
+    RAISE NOTICE 'N5 payload with CPF refused       : %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    v_ok := false;
+    BEGIN
+        INSERT INTO catalog_write_requests
+            (requested_by, requested_by_email, kind, payload)
+            VALUES (v_user, v_email, 'PRODUCT',
+                    jsonb_build_object('access_key', repeat('9', 44)));
+    EXCEPTION WHEN check_violation THEN v_ok := true;
+    END;
+    RAISE NOTICE 'N5 payload with NFC-e key refused : %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    -- ...and so must the key in its OFFICIAL FORMATTED layout
+    -- (2-4-14-2-3-9-9-1). A rule that only sees 44 consecutive digits lets
+    -- through the form a person actually copies out of the SEFAZ app -- which is
+    -- why the guard itself checks both forms. Built by concatenation, never a
+    -- literal: a literal here would trip scripts/guard_dados_sensiveis.py, the
+    -- very guard the card says must keep passing.
+    v_ok := false;
+    BEGIN
+        INSERT INTO catalog_write_requests
+            (requested_by, requested_by_email, kind, payload)
+            VALUES (v_user, v_email, 'PRODUCT',
+                    jsonb_build_object('access_key',
+                        '11'||'-'||'2222'||'-'||'33333333444444'||'-'||'55'
+                        ||'-'||'666'||'-'||'777777777'||'-'||'888888888'
+                        ||'-'||'9'));
+    EXCEPTION WHEN check_violation THEN v_ok := true;
+    END;
+    RAISE NOTICE 'N5 payload with key formatted refused: %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    -- A GTIN is NOT personal data: a 13-digit run must pass, so the CPF rule
+    -- cannot fire inside a longer digit string.
+    v_ok := false;
+    BEGIN
+        INSERT INTO catalog_write_requests
+            (requested_by, requested_by_email, kind, payload)
+            VALUES (v_user, v_email, 'PRODUCT',
+                    jsonb_build_object('gtin', repeat('7', 13)));
+        v_ok := true;
+    EXCEPTION WHEN check_violation THEN v_ok := false;
+    END;
+    RAISE NOTICE 'N5 payload with GTIN allowed      : %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    -- The approval transition.
+    UPDATE catalog_write_requests
+       SET status = 'APPROVED', reviewed_by = v_reviewer,
+           reviewed_by_email = 'reviewer@example.com',
+           decided_at = now(), review_note = 'approved in test'
+     WHERE id = v_req;
+
+    -- The requester's provenance survives their LGPD erasure: the FK goes NULL,
+    -- the e-mail stays.
+    DELETE FROM users WHERE id = v_user;
+    v_ok := (SELECT count(*) FROM catalog_write_requests
+              WHERE id = v_req
+                AND requested_by IS NULL
+                AND requested_by_email = v_email) = 1;
+    RAISE NOTICE 'N5 requester trace survives delete: %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    -- Deleting the REVIEWER must not falsify the approval: reviewed_by has no
+    -- FK, so it is never cleared. A FK ON DELETE SET NULL would abort the user
+    -- deletion right here, on ck_catalog_write_requests_decided.
+    DELETE FROM users WHERE id = v_reviewer;
+    v_ok := (SELECT count(*) FROM catalog_write_requests
+              WHERE id = v_req AND reviewed_by IS NOT NULL
+                AND decided_at IS NOT NULL) = 1;
+    RAISE NOTICE 'N5 reviewer survives, approval kept: %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    -- Leave one pending request so the queue view has something to show.
+    INSERT INTO catalog_write_requests
+        (requested_by, requested_by_email, kind, payload, justification)
+        VALUES (NULL, 'ana@example.com', 'SYNONYM',
+                '{"term":"moida","expands_to":"moida"}'::jsonb,
+                'Ana expects the catalogue to exist; she asks instead of being blocked');
+
+    IF v_pass THEN
+        RAISE NOTICE 'N5 RESULT: PASS (write requests gated by constraints)';
+    ELSE
+        RAISE NOTICE 'N5 RESULT: FAIL';
+    END IF;
+END $$;
+
+SELECT 'N5' AS test,
+       (SELECT count(*) FROM information_schema.columns
+         WHERE table_name='catalog_write_requests'
+           AND column_name IN ('id','requested_by','requested_by_email','kind',
+               'payload','target_id','justification','status','reviewed_by',
+               'reviewed_by_email','review_note','created_at','decided_at')) AS request_columns,
+       (SELECT count(*) FROM pg_constraint WHERE conname IN
+           ('ck_catalog_write_requests_open','ck_catalog_write_requests_decided',
+            'ck_catalog_write_requests_payload_no_pii',
+            'fk_catalog_write_requests_requested_by')) AS key_constraints,
+       (SELECT coalesce(sum(request_count), 0) FROM v_catalog_write_queue
+         WHERE status='OPEN') AS queue_open_count,
+       CASE WHEN (SELECT count(*) FROM information_schema.columns
+                   WHERE table_name='catalog_write_requests'
+                     AND column_name IN ('id','requested_by','requested_by_email','kind',
+                         'payload','target_id','justification','status','reviewed_by',
+                         'reviewed_by_email','review_note','created_at','decided_at')) = 13
+             AND (SELECT count(*) FROM pg_constraint WHERE conname IN
+                   ('ck_catalog_write_requests_open','ck_catalog_write_requests_decided',
+                    'ck_catalog_write_requests_payload_no_pii',
+                    'fk_catalog_write_requests_requested_by')) = 4
+             AND (SELECT coalesce(sum(request_count), 0) FROM v_catalog_write_queue
+                   WHERE status='OPEN') >= 1
+            THEN 'PASS' ELSE 'FAIL' END AS result;
+
+-- -----------------------------------------------------------------------------
+-- N6: LGPD retention -- the register decides, the queue obeys (internal task)
+-- -----------------------------------------------------------------------------
+-- Runs before N2: this block inserts audit_log and staging fixtures, and N2 is
+-- the last block precisely so its own fixtures do not disturb the counts above.
+\echo ''
+\echo '--- N6: retention policy and purge queue (db/010) ---'
+DO $$
+DECLARE
+    v_user  UUID;
+    v_ok    BOOLEAN;
+    v_n     INTEGER;
+    v_pass  BOOLEAN := true;
+BEGIN
+    INSERT INTO users (name, email) VALUES ('Retention Test', 'retention@example.com')
+        RETURNING id INTO v_user;
+
+    -- The register arrives seeded by the migration: seven targets, all of them
+    -- carrying a purpose, a legal basis and either a term or a review date.
+    SELECT count(*) INTO v_n FROM retention_policy;
+    RAISE NOTICE 'N6 register has 7 policies       : %',
+        CASE WHEN v_n = 7 THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND (v_n = 7);
+
+    v_ok := (SELECT count(*) FROM retention_policy
+              WHERE btrim(purpose) <> ''
+                AND legal_basis IN ('CONSENT', 'CONTRACT',
+                                    'LEGITIMATE_INTEREST', 'LEGAL_OBLIGATION')
+                AND (retention_days IS NOT NULL OR expires_at IS NOT NULL)) = 7;
+    RAISE NOTICE 'N6 every policy is justified     : %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    -- A term of zero is not a term.
+    v_ok := false;
+    BEGIN
+        INSERT INTO retention_policy (table_name, column_name, purpose, legal_basis, retention_days)
+        VALUES ('users', 'email', 'zero is not a term', 'CONTRACT', 0);
+    EXCEPTION WHEN check_violation THEN v_ok := true;
+    END;
+    RAISE NOTICE 'N6 term of zero refused          : %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    -- No fixed term is allowed, but never without a review date.
+    v_ok := false;
+    BEGIN
+        INSERT INTO retention_policy (table_name, column_name, purpose, legal_basis)
+        VALUES ('users', 'email', 'no term and no review date', 'CONTRACT');
+    EXCEPTION WHEN check_violation THEN v_ok := true;
+    END;
+    RAISE NOTICE 'N6 no term and no review refused : %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    -- A legal basis outside the closed set is not a basis.
+    v_ok := false;
+    BEGIN
+        INSERT INTO retention_policy (table_name, column_name, purpose, legal_basis, retention_days)
+        VALUES ('users', 'email', 'invented basis', 'BECAUSE_WE_WANT', 30);
+    EXCEPTION WHEN check_violation THEN v_ok := true;
+    END;
+    RAISE NOTICE 'N6 invented legal basis refused  : %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    -- The register cannot name a column that does not exist: an unenforceable
+    -- policy is refused instead of being kept as decoration.
+    v_ok := false;
+    BEGIN
+        INSERT INTO retention_policy (table_name, column_name, purpose, legal_basis, retention_days)
+        VALUES ('users', 'email_que_nao_existe', 'ghost target', 'CONTRACT', 30);
+    EXCEPTION WHEN foreign_key_violation THEN v_ok := true;
+    END;
+    RAISE NOTICE 'N6 non-existent target refused   : %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    -- (a) audit payload: one row past the 90-day window, one inside it.
+    INSERT INTO audit_log (user_id, table_name, operation, record_id,
+                           before_data, after_data, occurred_at)
+    VALUES (v_user, 'purchase_notes', 'UPDATE', v_user,
+            '{"k": 1}'::jsonb, '{"k": 2}'::jsonb, now() - interval '100 days'),
+           (v_user, 'purchase_notes', 'UPDATE', v_user,
+            '{"k": 3}'::jsonb, NULL,                now() - interval '10 days');
+
+    -- Both payload columns of the old row are due; the recent row is not.
+    SELECT count(*) INTO v_n FROM v_retention_due
+     WHERE record_owner = v_user AND table_name = 'audit_log';
+    RAISE NOTICE 'N6 audit payload: 2 due, 0 early : %',
+        CASE WHEN v_n = 2 THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND (v_n = 2);
+
+    -- (b) the surviving contact: the clock starts at executed_at, so a request
+    -- that has not concluded is not due.
+    INSERT INTO data_erasure_requests (user_id, email, requested_at, executed_at)
+    VALUES (v_user, 'retention@example.com',  now() - interval '200 days', now() - interval '100 days'),
+           (v_user, 'retention2@example.com', now() - interval '200 days', NULL);
+
+    SELECT count(*) INTO v_n FROM v_retention_due
+     WHERE record_owner = v_user AND table_name = 'data_erasure_requests'
+       AND purge_action = 'NULL_EMAIL';
+    RAISE NOTICE 'N6 email due only after erasure  : %',
+        CASE WHEN v_n = 1 THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND (v_n = 1);
+
+    -- (c) the coupon image: DONE is due immediately (the review is over);
+    -- PENDING gets the 30-day window; a receipt with no path is not a file.
+    INSERT INTO staging_receipts (id, user_id, source, status, file_path,
+                                  total_gross, discount_total, amount_paid, updated_at)
+    VALUES ('e5c0a1b2-0000-0000-0000-00000000d001', v_user, 'MANUAL', 'DONE',    'cupom-done.jpg',  10.00, 0, 10.00, now() - interval '1 hour'),
+           ('e5c0a1b2-0000-0000-0000-00000000d002', v_user, 'MANUAL', 'PENDING', 'cupom-fresh.jpg', 10.00, 0, 10.00, now()),
+           ('e5c0a1b2-0000-0000-0000-00000000d003', v_user, 'MANUAL', 'PENDING', 'cupom-velho.jpg', 10.00, 0, 10.00, now() - interval '40 days'),
+           ('e5c0a1b2-0000-0000-0000-00000000d004', v_user, 'MANUAL', 'PENDING', NULL,              10.00, 0, 10.00, now() - interval '40 days');
+
+    SELECT count(*) INTO v_n FROM v_retention_due
+     WHERE record_owner = v_user AND table_name = 'staging_receipts'
+       AND purge_action = 'DELETE_FILE';
+    RAISE NOTICE 'N6 image: DONE + stale, not fresh: %',
+        CASE WHEN v_n = 2 THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND (v_n = 2);
+
+    -- The trusted layer never enters the automatic queue: its policies carry no
+    -- term, and every branch of the view requires one.
+    SELECT count(*) INTO v_n FROM v_retention_due
+     WHERE table_name IN ('purchase_notes', 'line_items', 'users');
+    RAISE NOTICE 'N6 trusted layer stays out       : %',
+        CASE WHEN v_n = 0 THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND (v_n = 0);
+
+    -- The queue cannot contain a policy without a term, ever.
+    SELECT count(*) INTO v_n FROM v_retention_due WHERE retention_days IS NULL;
+    RAISE NOTICE 'N6 no term never appears in queue: %',
+        CASE WHEN v_n = 0 THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND (v_n = 0);
+
+    -- The e-mail has to be removable, or the registered window cannot be met
+    -- (db/010 drops NOT NULL and keeps ck_data_erasure_email).
+    v_ok := (SELECT is_nullable FROM information_schema.columns
+              WHERE table_name = 'data_erasure_requests' AND column_name = 'email') = 'YES'
+        AND EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conname = 'ck_data_erasure_email');
+    RAISE NOTICE 'N6 email can be minimized        : %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    -- An empty address is not a removal.
+    v_ok := false;
+    BEGIN
+        INSERT INTO data_erasure_requests (user_id, email) VALUES (v_user, '  ');
+    EXCEPTION WHEN check_violation THEN v_ok := true;
+    END;
+    RAISE NOTICE 'N6 empty email refused           : %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    IF v_pass THEN
+        RAISE NOTICE 'N6 RESULT: PASS (register governs the purge queue)';
+    ELSE
+        RAISE NOTICE 'N6 RESULT: FAIL';
+    END IF;
+END $$;
+
+SELECT 'N6' AS test,
+       (SELECT count(*) FROM retention_policy) AS policies,
+       (SELECT count(*) FROM retention_policy WHERE retention_days IS NULL) AS no_term,
+       (SELECT count(*) FROM v_retention_due WHERE retention_days IS NULL) AS leaked_no_term,
+       (SELECT count(*) FROM pg_trigger WHERE tgname = 'tr_retention_policy_target') AS target_trigger,
+       CASE WHEN (SELECT count(*) FROM retention_policy) = 7
+             AND (SELECT count(*) FROM v_retention_due WHERE retention_days IS NULL) = 0
+             AND (SELECT count(*) FROM pg_trigger
+                   WHERE tgname = 'tr_retention_policy_target') = 1
+            THEN 'PASS' ELSE 'FAIL' END AS result;
+
+-- -----------------------------------------------------------------------------
 -- N2: purchase_notes is immutable, except the staging link (internal task, C2)
 -- -----------------------------------------------------------------------------
 -- The design was decided before but never exercised: an earlier probe ran
