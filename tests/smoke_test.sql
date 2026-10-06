@@ -985,6 +985,138 @@ SELECT 'N5' AS test,
             THEN 'PASS' ELSE 'FAIL' END AS result;
 
 -- -----------------------------------------------------------------------------
+-- N7: a presentation link requires its product (card internal task, `db/015`)
+-- -----------------------------------------------------------------------------
+-- Two FKs acted on the same pair of columns: fk_staging_lines_product (SET NULL)
+-- and the composite fk_staging_lines_presentation (SET NULL). Deleting a product
+-- cascaded the presentations away and nulled product_id first, so the composite
+-- FK's WHERE matched nothing and presentation_id stayed, pointing at a row that
+-- no longer existed -- invisible to the FK because MATCH SIMPLE is vacuous when
+-- one column is NULL. db/015 repairs the unlink and forbids the contradiction.
+-- Before the fix this block FAILS at the first assertion: the line keeps
+-- presentation_id with product_id NULL. Runs before N2, which has to be last.
+\echo ''
+\echo '--- N7: no presentation link without its product ---'
+DO $$
+DECLARE
+    v_user  UUID;
+    v_rec   UUID;
+    v_prod  UUID;
+    v_pres  UUID;
+    v_ok    BOOLEAN;
+    v_pass  BOOLEAN := true;
+BEGIN
+    SELECT id INTO v_user FROM users ORDER BY created_at LIMIT 1;
+
+    INSERT INTO staging_receipts (user_id, source, total_gross, discount_total, amount_paid)
+        VALUES (v_user, 'MANUAL', 30.00, 0.00, 30.00) RETURNING id INTO v_rec;
+
+    -- (1) DELETE of the PRODUCT must not leave the presentation_id behind.
+    INSERT INTO products (name, base_unit) VALUES ('Orphan product A', 'G')
+        RETURNING id INTO v_prod;
+    INSERT INTO presentations (product_id, sale_unit_recognized, content_kind,
+                               content_quantity, content_unit, factor_base)
+        VALUES (v_prod, 'PC', 'FIXED', 500, 'G', 500) RETURNING id INTO v_pres;
+    INSERT INTO staging_lines (receipt_id, line_no, description_raw, sale_unit,
+                               quantity, unit_price, line_total, product_id,
+                               presentation_id, match_source)
+        VALUES (v_rec, 1, 'ORPHAN A', 'pc', 1, 10.00, 10.00,
+                v_prod, v_pres, 'DESCRIPTION');
+
+    DELETE FROM products WHERE id = v_prod;
+    v_ok := (SELECT product_id IS NULL AND presentation_id IS NULL
+               FROM staging_lines WHERE receipt_id = v_rec AND line_no = 1);
+    RAISE NOTICE 'N7 product delete leaves no orphan     : %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    -- (2) DELETE of the PRESENTATION must not leave a link behind either.
+    INSERT INTO products (name, base_unit) VALUES ('Orphan product B', 'G')
+        RETURNING id INTO v_prod;
+    INSERT INTO presentations (product_id, sale_unit_recognized, content_kind,
+                               content_quantity, content_unit, factor_base)
+        VALUES (v_prod, 'PC', 'FIXED', 500, 'G', 500) RETURNING id INTO v_pres;
+    INSERT INTO staging_lines (receipt_id, line_no, description_raw, sale_unit,
+                               quantity, unit_price, line_total, product_id,
+                               presentation_id, match_source)
+        VALUES (v_rec, 2, 'ORPHAN B', 'pc', 1, 10.00, 10.00,
+                v_prod, v_pres, 'DESCRIPTION');
+
+    DELETE FROM presentations WHERE id = v_pres;
+    v_ok := (SELECT product_id IS NULL AND presentation_id IS NULL
+               FROM staging_lines WHERE receipt_id = v_rec AND line_no = 2);
+    RAISE NOTICE 'N7 presentation delete leaves no link  : %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    -- (3) the invariant holds across the whole table: no half link survives.
+    v_ok := (SELECT count(*) FROM staging_lines
+              WHERE product_id IS NULL AND presentation_id IS NOT NULL) = 0;
+    RAISE NOTICE 'N7 no half link survives anywhere      : %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    -- (4) a contradictory direct write (no product, presentation set) is
+    --     REFUSED, not silently accepted through the composite FK's vacuity.
+    INSERT INTO products (name, base_unit) VALUES ('Orphan product C', 'G')
+        RETURNING id INTO v_prod;
+    INSERT INTO presentations (product_id, sale_unit_recognized, content_kind,
+                               content_quantity, content_unit, factor_base)
+        VALUES (v_prod, 'PC', 'FIXED', 500, 'G', 500) RETURNING id INTO v_pres;
+    v_ok := false;
+    BEGIN
+        INSERT INTO staging_lines (receipt_id, line_no, description_raw, sale_unit,
+                                   quantity, unit_price, line_total,
+                                   product_id, presentation_id)
+            VALUES (v_rec, 3, 'BAD DIRECT', 'pc', 1, 10.00, 10.00, NULL, v_pres);
+    EXCEPTION WHEN check_violation THEN v_ok := true;
+    END;
+    RAISE NOTICE 'N7 contradictory direct write refused  : %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    -- (5) review_state stays coherent with the unlinked line: it is PENDING
+    --     (still owed a decision) and NO_MATCH can now be recorded on it --
+    --     with db/008 the stale presentation_id made that write impossible.
+    v_ok := (SELECT review_state = 'PENDING' AND NOT reviewed
+               FROM staging_lines WHERE receipt_id = v_rec AND line_no = 1);
+    RAISE NOTICE 'N7 unlinked line stays PENDING         : %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    v_ok := false;
+    BEGIN
+        UPDATE staging_lines SET review_state = 'NO_MATCH', reviewed = TRUE,
+                                 match_note = 'nenhum candidato serve'
+         WHERE receipt_id = v_rec AND line_no = 1;
+        v_ok := true;
+    EXCEPTION WHEN check_violation THEN v_ok := false;
+    END;
+    RAISE NOTICE 'N7 NO_MATCH recordable after unlink    : %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    IF v_pass THEN
+        RAISE NOTICE 'N7 RESULT: PASS (a presentation link needs its product)';
+    ELSE
+        RAISE NOTICE 'N7 RESULT: FAIL';
+    END IF;
+END $$;
+
+SELECT 'N7' AS test,
+       (SELECT count(*) FROM pg_constraint
+         WHERE conname = 'ck_staging_lines_presentation_needs_product') AS needs_product_ck,
+       (SELECT count(*) FROM pg_trigger
+         WHERE tgrelid = 'staging_lines'::regclass
+           AND tgname = 'tr_staging_lines_presentation_link') AS repair_trigger,
+       CASE WHEN (SELECT count(*) FROM pg_constraint
+                   WHERE conname = 'ck_staging_lines_presentation_needs_product') = 1
+             AND (SELECT count(*) FROM pg_trigger
+                   WHERE tgrelid = 'staging_lines'::regclass
+                     AND tgname = 'tr_staging_lines_presentation_link') = 1
+            THEN 'PASS' ELSE 'FAIL' END AS result;
+
+-- -----------------------------------------------------------------------------
 -- N6: LGPD retention -- the register decides, the queue obeys (internal task)
 -- -----------------------------------------------------------------------------
 -- Runs before N2: this block inserts audit_log and staging fixtures, and N2 is

@@ -54,8 +54,16 @@ e deixar o `price_refs` no `007`. Rejeitada:
   **não** a referencia — foi conferido por leitura do DDL, não por suposição. Rodá-lo por
   último é inofensivo.
 - **Sem colisão futura.** O próximo número livre é `013`. O `db/009` do card `internal task`
-  (`009_staging_presentation_requires_product.sql`, fora do escopo destes sete) fica
-  registrado como hotspot: quando ele for integrado, colide com `db/009_catalog_write_requests`.
+  (`009_staging_presentation_requires_product.sql`, fora do escopo destes sete) ficou
+  registrado como hotspot: quando fosse integrado, colidiria com
+  `db/009_catalog_write_requests`. **Resolvido:** o `internal task` (`internal task`) integrou o
+  conserto como `db/014_staging_presentation_requires_product.sql` e moveu o bloco do smoke
+  de `N5` para `N7`; a cadeia destes sete termina em `db/013`.
+  **Renumerado de novo (2026-10-06):** o `db/014` foi ocupado em `main` pela migração de
+  variação de preço (`db/014_price_variation_columns.sql`, <internal PR>, `661e9ba`) enquanto o PR
+  #6 estava aberto; o conserto de órfão passou a `db/015`. Ver
+  [`2026-10-06-renumeracao-db014-db015.md`](2026-10-06-renumeracao-db014-db015.md). O
+  ponteiro `db/014` acima é o número **histórico** do arquivo, não o vigente.
 
 ## 4. O que não muda
 
