@@ -1,5 +1,5 @@
 -- =============================================================================
--- home_shopper -- seed: the six scope categories and their declared attributes
+-- home_shopper -- seed: the eight scope categories and their declared attributes
 -- PostgreSQL 16
 --
 -- internal task, revised by internal task.
@@ -12,6 +12,16 @@
 --   shrank. The attribute removed is the one PRD §4.3 still lists for those four
 --   categories; widening the list later is DATA (INSERT INTO category_attributes),
 --   not a migration.
+--
+-- REVISION BY internal task (2026-10-05): Jonas decided the scope holds EIGHT
+--   top-level categories -- the six food ones PLUS Limpeza and Higiene (card
+--   internal task, comment "Seriam 8 incluindo Limpeza e Higiene."). The two enter
+--   here with their declared attributes: 6 categories -> 8, 10 declarations ->
+--   14. PRD §6.2.2 / §4.2 / §4.3, ADR-0001 and the equivalence spec were aligned
+--   in the same change; the conflict between PRD §6.2.2 (6) and the 2026-10-03
+--   domain review (8) is closed by the decision record
+--   docs/decisions/2026-10-05-escopo-8-categorias-limpeza-higiene.md.
+--   Pet stays OUT of the cycle: it was not part of the decision.
 --
 -- STATUS: PROPOSAL. NOT APPLIED to the canonical database (home_shopper-db) and
 --   NOT merged. Depends on db/007_category_attributes_and_category_rules.sql,
@@ -26,7 +36,7 @@
 --       INSERT INTO products (...) VALUES ('Chicken leg Swift',
 --                                          (SELECT id FROM categories), ...);
 
---   With six seeded rows that subquery returns more than one row and the test
+--   With seeded rows that subquery returns more than one row and the test
 --   errors -- a seed must not be able to break the domain test. A seed is DATA,
 --   not schema, so it stays outside the db/ glob and is applied by hand after
 --   the go:
@@ -35,14 +45,19 @@
 --         -v ON_ERROR_STOP=1 -f - < seeds/2026-10-05-categories-and-attributes.sql
 --
 -- SOURCES
---   * the six categories -- PRD.md §6.2.2 and ADR-0001 "Escopo ratificado" item 1.
---     Limpeza / Higiene / Pet are OUT of this cycle: ADR-0001 records that adding
---     them later is DATA, not a migration -- so they are not seeded here. (The
---     2026-10-03 review names Limpeza and Higiene as main categories; that is a
---     scope widening still to be ratified, see the proposal doc §7.)
+--   * the eight categories -- PRD.md §6.2.2 (revised 2026-10-05) and ADR-0001
+--     "Escopo ratificado" item 1 (amended 2026-10-05). Limpeza and Higiene were
+--     named as main categories by the 2026-10-03 domain review, which fixes the
+--     split -- Higiene = higiene pessoal e cuidados corporais; Limpeza = limpeza
+--     e cuidado doméstico; repelente corporal -> Higiene; repelente de ambiente
+--     (inclusive de tomada) and odorizador de ambiente -> Limpeza. Jonas
+--     ratified the widening on 2026-10-05 (card internal task). Pet is OUT.
 --   * the declared attributes -- PRD.md §4.3 and the ACCEPTED spec
 --     docs/superpowers/specs/2026-10-01-product-equivalence-by-category.md.
---     `brand` is NOT seeded: it lives in products.brand (spec R5).
+--     Limpeza and Higiene declare `product_type` and `variant`: the minimum the
+--     observed corpus needs, since it carries same-brand/same-type lines that
+--     differ only by variant (source-level counts and the pairs are in the
+--     decision record). `brand` is NOT seeded: it lives in products.brand (R5).
 --     `formulation` (padaria) is NOT seeded: the spec marks it PROPOSTA, not
 --     grounded in §3.2/§4.2.
 --     One attribute that PRD §4.3 still lists is NOT seeded: decision D2 of
@@ -52,8 +67,8 @@
 --     not a migration. (The attribute key is deliberately not spelled out here:
 --     internal task requires this file to have zero matches for it.)
 --
--- WHY parent_id IS NULL FOR ALL SIX
---   The six are top-level. The parentheticals in PRD §6.2.2 -- "(leite, iogurte,
+-- WHY parent_id IS NULL FOR ALL EIGHT
+--   The eight are top-level. The parentheticals in PRD §6.2.2 -- "(leite, iogurte,
 --   queijo)", "(enlatados, massas, etc.)" -- are illustrative EXAMPLES, not
 --   required children. Seeding subcategories would put invented names into the
 --   global `categories` namespace and leave them with no declared attributes
@@ -68,7 +83,7 @@
 BEGIN;
 
 -- -----------------------------------------------------------------------------
--- 1. The six scope categories
+-- 1. The eight scope categories
 -- -----------------------------------------------------------------------------
 INSERT INTO categories (id, name, parent_id)
 SELECT v.id, v.name, NULL
@@ -78,7 +93,9 @@ FROM (VALUES
     ('9f1c0000-0000-4000-8000-000000000003'::uuid, 'Mercearia'),
     ('9f1c0000-0000-4000-8000-000000000004'::uuid, 'Bebidas'),
     ('9f1c0000-0000-4000-8000-000000000005'::uuid, 'Hortifruti'),
-    ('9f1c0000-0000-4000-8000-000000000006'::uuid, 'Padaria')
+    ('9f1c0000-0000-4000-8000-000000000006'::uuid, 'Padaria'),
+    ('9f1c0000-0000-4000-8000-000000000007'::uuid, 'Limpeza'),
+    ('9f1c0000-0000-4000-8000-000000000008'::uuid, 'Higiene')
 ) AS v(id, name)
 WHERE NOT EXISTS (
     SELECT 1
@@ -105,7 +122,11 @@ FROM (VALUES
     ('Mercearia',  'variant',      'TEXT'),
     ('Bebidas',    'type',         'TEXT'),
     ('Hortifruti', 'variety',      'TEXT'),
-    ('Padaria',    'type',         'TEXT')
+    ('Padaria',    'type',         'TEXT'),
+    ('Limpeza',    'product_type', 'TEXT'),
+    ('Limpeza',    'variant',      'TEXT'),
+    ('Higiene',    'product_type', 'TEXT'),
+    ('Higiene',    'variant',      'TEXT')
 ) AS v(category_name, attribute, value_kind)
 JOIN categories c
   ON lower(btrim(c.name)) = lower(btrim(v.category_name))
@@ -119,8 +140,8 @@ WHERE NOT EXISTS (
 -- -----------------------------------------------------------------------------
 -- 3. Self-check -- the seed refuses to end in a half-loaded state
 -- -----------------------------------------------------------------------------
--- Makes the seed assert its own result instead of leaving a silent gap: the six
--- categories must exist and all ten declarations must be present.
+-- Makes the seed assert its own result instead of leaving a silent gap: the eight
+-- categories must exist and all fourteen declarations must be present.
 DO $$
 DECLARE
     v_categories   INTEGER;
@@ -129,19 +150,21 @@ BEGIN
     SELECT count(*) INTO v_categories
       FROM categories
      WHERE lower(btrim(name)) IN
-           ('laticínios', 'carnes', 'mercearia', 'bebidas', 'hortifruti', 'padaria');
+           ('laticínios', 'carnes', 'mercearia', 'bebidas', 'hortifruti', 'padaria',
+            'limpeza', 'higiene');
 
     SELECT count(*) INTO v_attributes
       FROM category_attributes ca
       JOIN categories c ON c.id = ca.category_id
      WHERE lower(btrim(c.name)) IN
-           ('laticínios', 'carnes', 'mercearia', 'bebidas', 'hortifruti', 'padaria');
+           ('laticínios', 'carnes', 'mercearia', 'bebidas', 'hortifruti', 'padaria',
+            'limpeza', 'higiene');
 
-    IF v_categories <> 6 THEN
-        RAISE EXCEPTION 'category seed incomplete: % of 6 categories present', v_categories;
+    IF v_categories <> 8 THEN
+        RAISE EXCEPTION 'category seed incomplete: % of 8 categories present', v_categories;
     END IF;
-    IF v_attributes <> 10 THEN
-        RAISE EXCEPTION 'attribute seed incomplete: % of 10 declarations present', v_attributes;
+    IF v_attributes <> 14 THEN
+        RAISE EXCEPTION 'attribute seed incomplete: % of 14 declarations present', v_attributes;
     END IF;
 END $$;
 

@@ -30,12 +30,20 @@ Nenhuma das três substitui a outra. Toda regra abaixo cita a fonte; adição se
 
 ## Escopo
 
-**Incluído:** as 6 categorias do PRD §3.2 — laticínios, carnes, mercearia, bebidas, hortifruti,
-padaria.
+**Incluído:** as **8** categorias do PRD §6.2.2 — laticínios, carnes, mercearia, bebidas, hortifruti,
+padaria, **limpeza** e **higiene**. As duas últimas entraram por decisão do Jonas em 2026-10-05
+(D7, card `internal task`), que ratifica o review de domínio de 2026-10-03 e encerra o conflito com o
+texto anterior de 6 categorias.
 
-**Fora:** limpeza, higiene, pet e demais categorias — ratificado pelo Jonas (2026-10-01). O schema
-já suporta a árvore de categorias (`categories.parent_id`), então acrescentar categoria é dado,
-não migração — mas cada categoria nova exige lista de atributos e exemplos validados.
+**Fora:** pet e demais categorias — ratificado pelo Jonas (2026-10-01; mantido na decisão de
+2026-10-05). O schema já suporta a árvore de categorias (`categories.parent_id`), então acrescentar
+categoria é dado, não migração — mas cada categoria nova exige lista de atributos e exemplos
+validados, que são as seções de Limpeza e Higiene abaixo.
+
+**Procedência dos exemplos dessas duas categorias:** `corpus` = par observado nas descrições do banco
+canônico em 2026-10-05; `+ normalização` = a contraparte é a mesma linha com a abreviação expandida
+(ADR-0002 §3); `R4`/`R5` = regra transversal já ratificada, aplicada a uma linha observada. Nenhum
+par foi validado com nota nova ingerida.
 
 **Depois:** algoritmo de matching, representação de recipiente/conteúdo, UX de revisão
 (ADR-0001 §"Decisões de implementação ainda necessárias").
@@ -307,6 +315,59 @@ especificação.
 | 6 | `PAO FRANCES` ≠ `PAO DE QUEIJO` | NÃO-MATCH | `type` |
 | 7 | `PAO 1UN` | PENDENTE | tipo ausente |
 
+### Limpeza (limpeza e cuidado doméstico)
+
+**Atributos relevantes:** marca **[global]**, `product_type`, `variant`. (D7, 2026-10-05)
+
+**Fronteira de classificação (2026-10-03):** repelente de ambiente — inclusive de tomada — e
+odorizador de ambiente são Limpeza; repelente corporal é Higiene.
+
+**Regras de ambiguidade:**
+- Tipo de produto ausente ou não resolvido na descrição → PENDENTE.
+- Tamanho, recipiente e refil **não** distinguem (R4).
+- Marca é aplicável (o corpus traz marca em praticamente toda linha) → ausente = desconhecido (R5).
+- Descrição que não resolve a própria categoria — `ALCOOL COOPER 1L CLA` (álcool doméstico × álcool de
+  uso pessoal) — fica PENDENTE de classificação; a identidade não decide isso.
+
+**Exemplos:**
+
+| # | Par | Resultado | Base |
+|---|---|---|---|
+| 1 | `DESTAC 750ML MADEIRA` ≡ `DESTAC MADEIRAS 750` | MATCH | corpus — mesmo produto; ordem das palavras e abreviação |
+| 2 | `LIMPADOR AZULIM PISOS LAMIN.750ml` ≡ `LIMPADOR AZULIM PISOS LAMINADOS 750ML` | MATCH | corpus + normalização |
+| 3 | `DET LIMPOL 500ML COC` ≠ `DET LIMPOL 500ML CRI` | NÃO-MATCH | corpus — `variant` |
+| 4 | `AGUA SAN CANDIDA 2L` ≠ `AGUA SANI SUPREMA 2L` | NÃO-MATCH | corpus — R5 |
+| 5 | `LIMPADOR AZULIM PISOS LAMIN.750ml` ≠ `LIMPADOR VEJA M.USO GOLD EMB.ECON.750ml` | NÃO-MATCH | corpus — `product_type` + R5 |
+| 6 | `AMAC DOWNY 1L BRISA` ≠ `AMAC VIDA MACIA 1L G` | NÃO-MATCH | corpus — R5 |
+| 7 | `LIMPADOR AZULIM PISOS LAMIN.750ml` ≡ `LIMPADOR AZULIM PISOS LAMIN.500ml` | MATCH | R4 — tamanho é apresentação |
+| 8 | `ALCOOL COOPER 1L CLA` | PENDENTE | corpus — categoria e tipo não resolvidos |
+| 9 | `PROT WYDA MOL 27X27` | PENDENTE | corpus — `product_type` ausente |
+
+### Higiene (higiene pessoal e cuidados corporais)
+
+**Atributos relevantes:** marca **[global]**, `product_type`, `variant`. (D7, 2026-10-05)
+
+**Regras de ambiguidade:**
+- Tipo ausente ou não resolvido → PENDENTE.
+- Tamanho e multipack **não** distinguem (R4/R11): `… 12un` é apresentação.
+- Papel higiênico é Higiene; papel-toalha e guardanapo de cozinha são cuidado doméstico, **não**
+  Higiene — e hoje ficam fora das 8 categorias.
+- Marca é aplicável (Mili, Snob, Nivea, Protex, Colgate, Pantene, Granado observados) → ausente =
+  desconhecido (R5).
+
+**Exemplos:**
+
+| # | Par | Resultado | Base |
+|---|---|---|---|
+| 1 | `SAB NIVEA CACAU E JA` ≠ `SAB NIVEA KARIT E L.` | NÃO-MATCH | corpus — `variant` |
+| 2 | `SAB GRANADO BE 90G E` ≡ `SABONETE GRANADO BEBÊ 90G` | MATCH | corpus + normalização |
+| 3 | `PAPEL HIG.MILI NEUTRO F.D.30m 12un` ≡ `PAPEL HIGIÊNICO MILI NEUTRO FOLHA DUPLA 30M` | MATCH | corpus + normalização; multipack é apresentação (R4) |
+| 4 | `SAB PROTEX 85G MACAD` ≠ `SAB GRANADO BE 90G E` | NÃO-MATCH | corpus — R5 |
+| 5 | `CR DEN COLG 90G` ≠ `SH PANT 400ML BAMBU` | NÃO-MATCH | corpus — `product_type` |
+| 6 | `CR DEN COLG 90G` ≡ `CREME DENTAL COLGATE 90G` | MATCH | corpus + normalização |
+| 7 | `TOALHA HIP SNOB C/3R` | PENDENTE | corpus — "HIP" não resolve papel higiênico × papel-toalha |
+| 8 | `HIDROST BLISTER 50ML` | PENDENTE | corpus — `product_type` ausente |
+
 ## Lacunas fechadas
 
 A ADR-0001 (linha 48) exige critério próprio para peso drenado, peso variável e venda por
@@ -373,7 +434,10 @@ derivação (ADR-0001 r.5). Todas exigem decisão explícita:
 
 Registradas na thread do `#operacao`. Substituem as pendências correspondentes.
 
-1. **Escopo** — manter as 6 categorias. Limpeza, higiene e pet ficam fora deste ciclo.
+1. **Escopo** — ~~manter as 6 categorias. Limpeza, higiene e pet ficam fora deste ciclo.~~
+   **Substituída em 2026-10-05 (D7, card `internal task`):** o escopo passa a **8 categorias**, com
+   **Limpeza** e **Higiene** dentro; pet segue fora. O item original fica registrado apontando a
+   decisão sucessora.
 2. **Conservação fora de carnes** — restrita a carnes. Não se generaliza.
 3. **Origem em hortifruti** — não adotar `orgânico ≠ convencional`.
 4. **Equivalências de rótulo** — `zero lactose` ≡ `sem lactose` fica PENDENTE; é sinônimo com

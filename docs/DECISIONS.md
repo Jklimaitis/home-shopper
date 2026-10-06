@@ -23,6 +23,7 @@ está documentado no [ERD](ERD.md).
 | Documento | Tema | Status |
 |---|---|---|
 | [2026-10-05 — qual banco é canônico](decisions/2026-10-05-canonical-database.md) | Dois bancos com dados divergentes (`home_shopper-db` vazio vs `postgres`/`home_shopper` com 15 notas); loader e input. Card `internal task` | **Aceita** (2026-10-05) — (A) `home_shopper-db` canônico + (c) os 4 inputs faltantes reconstruídos de `home_shopper`; base carregada e verificada 15/573 |
+| [2026-10-05 — 8 categorias no escopo: Limpeza e Higiene](decisions/2026-10-05-escopo-8-categorias-limpeza-higiene.md) | Escopo do catálogo: 6 (PRD §6.2.2 / ADR-0001) × 8 (review de domínio de 2026-10-03); atributos das categorias novas. Card `internal task` | **Aceita** (2026-10-05) — **8 categorias**; `product_type` + `variant` em Limpeza e Higiene; pet segue fora; PRD, ADR-0001, spec e seed alinhados |
 
 ## Leitura por estado, não por número
 

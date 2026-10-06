@@ -57,6 +57,8 @@ A escolha da unidade-base de exibição, da precisão e das regras de cálculo d
 Decisões do usuário registradas em 2026-10-01:
 
 1. **Categorias** — as 6 do PRD §3.2 (laticínios, carnes, mercearia, bebidas, hortifruti, padaria). Limpeza, higiene e pet ficam fora deste ciclo; acrescentá-las depois é dado, não migração.
+
+   > **Emenda de 2026-10-05 (D7, card `internal task`):** o escopo passa a **8** categorias — **Limpeza** e **Higiene** entram, com `product_type` e `variant` declarados; a fronteira de classificação é a do review de 2026-10-03. **Pet segue fora.** O texto original acima fica preservado como registro da decisão de 2026-10-01 e aponta a sucessora; detalhe em `docs/decisions/2026-10-05-escopo-8-categorias-limpeza-higiene.md`.
 2. **Conservação** — restrita a carnes (regra 9). Não se generaliza.
 3. **Origem em hortifruti** — `orgânico ≠ convencional` não é adotado.
 4. **Equivalências de rótulo** — `zero lactose` ≡ `sem lactose` e `zero` ≡ `sem açúcar` ficam **PENDENTE**. São sinônimos com escopo, não regra de identidade.

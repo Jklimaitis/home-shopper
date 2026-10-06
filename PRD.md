@@ -474,7 +474,7 @@ erDiagram
 |---|---|
 | **users** | Usuário da plataforma. `DELETE` em cascata remove compras; catálogo sobrevive (ADR-0004 §5) |
 | **stores** | Estabelecimento emissor. CNPJ identifica **pessoa jurídica** — dado público, não sensível |
-| **categories** | Categoria do produto, com hierarquia (`parent_id`). As 6 do escopo estão em §6.2.2 |
+| **categories** | Categoria do produto, com hierarquia (`parent_id`). As 8 do escopo estão em §6.2.2 |
 | **products** | Produto canônico — identidade do **conteúdo**. Sem `user_id`: é global |
 | **synonyms** | Abreviação/sinônimo com escopo. **No schema, `scope NULL = global`** — o default do banco é **global**, não local (corrigido na v2.1, achado C-3) |
 | **presentations** | Forma comercial: quantidade, unidade, embalagem e `factor_base`. Funde alias e conversão **de propósito** |
@@ -499,6 +499,8 @@ Cada categoria define quais atributos são relevantes para equivalência:
 - **Bebidas:** `type`, `flavor`
 - **Hortifruti:** `variety`
 - **Padaria:** `type`, `flavor`
+- **Limpeza:** `product_type`, `variant`
+- **Higiene:** `product_type`, `variant`
 
 Fonte ratificada dos critérios e exemplos por categoria:
 `docs/superpowers/specs/2026-10-01-product-equivalence-by-category.md` (status `accepted`).
@@ -693,7 +695,9 @@ Regras:
 
 > ↩ **citação legada: PRD §3.2**
 
-**Escopo ratificado:** as 6 categorias abaixo. Limpeza, higiene e pet ficam **fora** deste ciclo.
+**Escopo ratificado:** as **8** categorias abaixo. Limpeza e Higiene entraram no escopo por decisão
+do Jonas em 2026-10-05 (decisão D7, card `internal task`, que encerra o conflito com o review de
+2026-10-03); **pet** e demais categorias ficam **fora** deste ciclo.
 
 ##### Laticínios (leite, iogurte, queijo)
 - Atributos relevantes: marca, tipo (integral/desnatado/semidesnatado), condição de lactose, sabor
@@ -725,6 +729,20 @@ Regras:
 ##### Padaria
 - Atributos relevantes: tipo, sabor
 - `PÃO FRANCÊS` = `PÃO FRANCÊS` (se mesmo tipo)
+
+##### Limpeza (limpeza e cuidado doméstico)
+- Atributos relevantes: marca, tipo de produto (`product_type`), variante (`variant`)
+- Repelente de ambiente, inclusive de tomada, e odorizador de ambiente são **Limpeza**
+- `DET LIMPOL 500ML COCO` ≠ `DET LIMPOL 500ML CRISTAL` (variante)
+- `DET LIMPOL 500ML` = `DETERGENTE LIMPOL 500ML` (mesmo tipo e marca)
+- Amaciante de marcas diferentes não se agrupa (marca)
+
+##### Higiene (higiene pessoal e cuidados corporais)
+- Atributos relevantes: marca, tipo de produto (`product_type`), variante (`variant`)
+- Repelente corporal é **Higiene**
+- `SAB NIVEA CACAU` ≠ `SAB NIVEA KARITÉ` (variante)
+- `PAPEL HIG.MILI NEUTRO F.D.30m 12un` = `PAPEL HIGIÊNICO MILI NEUTRO FOLHA DUPLA 30M` (multipack é apresentação)
+- Tipo ausente na fonte → PENDENTE
 
 **Fonte canônica com os casos de teste completos:**
 `docs/superpowers/specs/2026-10-01-product-equivalence-by-category.md` — tabelas MATCH / NÃO-MATCH /
