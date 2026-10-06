@@ -22,41 +22,34 @@ unit that price is expressed in and is part of the window: a `min()` across
 `0,0299 in G` and `29,9 in KG` would compare different scales (ADR-0003 1), and
 this schema has no `KG`/`L` at all for that reason.
 
-### The 30-day window is relative to each row, never to `current_date`
+### `price_refs` holds the OBSERVATION, and the window is a query (decision D10)
 
-For a row at `ref_date = R`, `min_30d` / `max_30d` are the min and max of the
-weighted price over `(R - 30 days, R]` for the SAME
-`(user_id, product_id, store_id, base_unit)`. The window ends at `R`, not at
-today: `ref_date` spans 2025-09 to 2026-09, so a `current_date` window would
-leave `min_30d` / `max_30d` empty for nearly every row -- a silently wrong
-result, not a visible error.
+Decision D10 (Jonas, 2026-10-05) made the 7/30/90/180/365-day window a SCREEN
+FILTER, not a column, and `db/016` carries that out: the five per-preset columns
+(`min_30d`, `max_30d`, `var_pct_30d`, `samples_30d`, `price_spread_pct`) are
+gone. Every aggregate over a window is computed on read by `v_price_window` (one
+row per observation x preset) and by `price_window()` (one row per product/store
+pair, window as a parameter).
 
-### `samples_30d` -- the count the alert threshold needs
+That is why this batch no longer carries the 30-day LATERAL: writing
+`min_30d`/`max_30d`/`samples_30d` would be a second producer of a number the
+view already computes -- and the only one that can go stale, since it would know
+exactly one preset. What remains is the price a person actually paid.
 
-`samples_30d` is how many aggregated (day) price points the window held: the
-number of values `min_30d` / `max_30d` were taken over. ADR-0003 requires a
-MINIMUM number of samples before those columns may drive an alert ("alertar
-sobre uma unica compra e ficcao") and leaves that number as a product decision
-(internal task). This loader does not decide the number -- it writes the count so
-the decision can be applied later. Without it the threshold is undecidable,
-because the window is relative to `ref_date` and cannot be recomputed from
-`price_refs` once the row is stored (migration `db/013`).
+### `price_change_pct` -- written here, and NOT a window
 
-### `var_pct_30d` is left NULL, deliberately
+The one derived value that stays is the signed change against the IMMEDIATELY
+PREVIOUS observation of the same `(user_id, product_id, store_id, base_unit)`
+(decision D9, `db/014`). It is a `LAG`, not a window: it answers "did this price
+move since we last saw it", a fact that is true whatever preset the screen asks
+for. It is the MVP badge (internal task P2), and before this change only db/014's
+one-shot backfill filled it -- so it went stale on the next batch run.
 
-ADR-0003 does not define the formula. The two candidate readings disagree in
-sign and in meaning:
-
-  * amplitude:      `(max_30d - min_30d) / min_30d * 100` -- always >= 0.
-  * trend:          the newest price against the oldest in the window -- signed.
-
-The panel needs a SIGNED direction (PRD: "variacao sempre com seta", down/up),
-which the amplitude cannot express; the trend reading is the one that could, but
-which endpoint counts as "the previous price" is a business definition the ADR
-never states. This is the same family as the minimum-sample number: a product
-decision, not this card's. So the column stays NULL -- never 0 -- rather than
-assert a variation no decision authorised. Resolving it is a one-line change
-where the `NULL::numeric` below sits.
+NULL is the honest value: it means "not comparable yet" (no previous
+observation, or the previous price is 0). A signed change of exactly 0 would
+mean "the price is identical", which is NOT a variation, and
+`ck_price_refs_change_finite` forbids it -- so an unchanged price is written as
+NULL, never 0.
 
 Idempotency
 -----------
@@ -84,11 +77,11 @@ import sys
 
 # The batch. `%(user_filter)s` is replaced for --user-id; empty by default.
 BATCH_SQL = """\
--- price_refs <- v_price_aggregation (ADR-0003 5). Window per row:
--- (ref_date - 30 days, ref_date] for the same (user, product, store, base_unit).
+-- price_refs <- v_price_aggregation (ADR-0003 5). The observation and the
+-- window-INDEPENDENT change (D9); no 30-day window any more (D10, db/016).
 INSERT INTO price_refs
     (user_id, product_id, store_id, ref_date, base_unit,
-     base_price, min_30d, max_30d, var_pct_30d, samples_30d, updated_at)
+     base_price, price_change_pct, updated_at)
 SELECT
     va.user_id,
     va.product_id,
@@ -96,43 +89,44 @@ SELECT
     va.ref_date,
     va.base_unit,
     va.weighted_price,
-    w.mn,
-    w.mx,
-    -- var_pct_30d: ADR-0003 does not define the formula; see the module
-    -- docstring. NULL, not 0 -- no variation is asserted.
-    NULL::numeric,
-    w.n::integer,
+    -- Signed change against the previous observation of the same
+    -- (user, product, store, unit). NULL when there is nothing to compare
+    -- against, and NULL (never 0) when the price did not move:
+    -- ck_price_refs_change_finite forbids a 0 that would claim a variation.
+    CASE
+        WHEN va.prev_price IS NULL
+          OR va.prev_price = 0
+          OR va.weighted_price = va.prev_price THEN NULL
+        ELSE round(((va.weighted_price - va.prev_price)
+                    / va.prev_price * 100)::numeric, 2)
+    END,
     now()
-FROM v_price_aggregation va
-JOIN LATERAL (
-    SELECT min(va3.weighted_price) AS mn,
-           max(va3.weighted_price) AS mx,
-           count(*)               AS n
-      FROM v_price_aggregation va3
-     WHERE va3.user_id    = va.user_id
-       AND va3.product_id = va.product_id
-       AND va3.store_id   = va.store_id
-       AND va3.base_unit  = va.base_unit
-       AND va3.ref_date   > va.ref_date - 30
-       AND va3.ref_date  <= va.ref_date
-) w ON true
+FROM (
+    SELECT
+        va0.user_id,
+        va0.product_id,
+        va0.store_id,
+        va0.ref_date,
+        va0.base_unit,
+        va0.weighted_price,
+        lag(va0.weighted_price) OVER w AS prev_price
+    FROM v_price_aggregation va0
+    WINDOW w AS (PARTITION BY va0.user_id, va0.product_id, va0.store_id, va0.base_unit
+                 ORDER BY va0.ref_date)
+) va
 %(user_filter)s\
 ON CONFLICT ON CONSTRAINT uk_price_refs_user_product_store_date
 DO UPDATE SET
-    base_price  = EXCLUDED.base_price,
-    base_unit   = EXCLUDED.base_unit,
-    min_30d     = EXCLUDED.min_30d,
-    max_30d     = EXCLUDED.max_30d,
-    samples_30d = EXCLUDED.samples_30d,
-    updated_at  = now()
+    base_price       = EXCLUDED.base_price,
+    base_unit        = EXCLUDED.base_unit,
+    price_change_pct = EXCLUDED.price_change_pct,
+    updated_at       = now()
 -- Rewrite nothing when the recomputed values are identical: a second run with
 -- the same source is a true no-op (command tag INSERT 0 0), and updated_at
 -- moves only when a value actually changed.
-WHERE (price_refs.base_price, price_refs.base_unit, price_refs.min_30d,
-       price_refs.max_30d, price_refs.samples_30d)
+WHERE (price_refs.base_price, price_refs.base_unit, price_refs.price_change_pct)
       IS DISTINCT FROM
-      (EXCLUDED.base_price, EXCLUDED.base_unit, EXCLUDED.min_30d,
-       EXCLUDED.max_30d, EXCLUDED.samples_30d);
+      (EXCLUDED.base_price, EXCLUDED.base_unit, EXCLUDED.price_change_pct);
 """
 
 _UUID_RE = re.compile(
@@ -148,7 +142,7 @@ def build_sql(user_id: str | None) -> str:
     else:
         if not _UUID_RE.match(user_id):
             raise SystemExit(f"error: --user-id is not a UUID: {user_id!r}")
-        # After the LATERAL join, before ON CONFLICT.
+        # On the subquery that already computed the lag, before ON CONFLICT.
         user_filter = f"WHERE va.user_id = '{user_id}'::uuid\n"
     return BATCH_SQL % {"user_filter": user_filter}
 
@@ -174,9 +168,9 @@ def main() -> int:
 
     scope = f"user {args.user_id}" if args.user_id else "all users"
     print(
-        f"# price_refs batch: {scope}; window (ref_date-30, ref_date] per "
-        f"(user, product, store, base_unit); var_pct_30d left NULL (ADR-0003 "
-        f"does not define the formula)",
+        f"# price_refs batch: {scope}; writes the observed price and "
+        f"price_change_pct (previous observation of the same key); the window "
+        f"is a query (D10, db/016)",
         file=sys.stderr,
     )
     sys.stdout.write("\n".join(statements) + "\n")

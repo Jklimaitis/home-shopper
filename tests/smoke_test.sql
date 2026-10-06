@@ -1117,6 +1117,175 @@ SELECT 'N7' AS test,
             THEN 'PASS' ELSE 'FAIL' END AS result;
 
 -- -----------------------------------------------------------------------------
+-- N8: the price window is a query, not a column (internal task, `db/016`)
+-- -----------------------------------------------------------------------------
+-- Decision D10 (option B): the screen presets 7/30/90/180/365 days are a FILTER.
+-- `price_refs` keeps the observation and the window-INDEPENDENT
+-- `price_change_pct`; every aggregate over a window is computed on read by
+-- `v_price_window` (one row per observation x preset) and by `price_window()`
+-- (one row per product/store pair, window as a PARAMETER).
+--
+-- The fixture has four observations of one (product, store): two in June-2026
+-- (a pair, both at 20.00 -- a spread of 0.00 that is a TRUE statement) and two
+-- in January-2026 (9 days apart, so the 7-day window of the FIRST one holds only
+-- itself -- one sample, no variation, NULL). With the observation of 2026-06-05
+-- as the anchor: 7 days = 2 samples, 365 days = 4.
+-- Runs before N2, which has to stay last.
+\echo ''
+\echo '--- N8: price window -- preset is a row, window is a parameter ---'
+DO $$
+DECLARE
+    v_user   UUID;
+    v_store  UUID;
+    v_prod   UUID;
+    v_ok     BOOLEAN;
+    v_pass   BOOLEAN := true;
+    v_n      INTEGER;
+    v_s1     NUMERIC;
+    v_s2     NUMERIC;
+    v_x1     BIGINT;
+    v_x2     BIGINT;
+    v_cov    TEXT;
+    v_left   INTEGER;
+BEGIN
+    -- (1) No per-preset column survives: the whole point of option B.
+    SELECT count(*) INTO v_left FROM information_schema.columns
+     WHERE table_name = 'price_refs'
+       AND column_name IN ('min_30d','max_30d','var_pct_30d','samples_30d',
+                           'price_spread_pct');
+    RAISE NOTICE 'N8 no per-preset column on price_refs : %',
+        CASE WHEN v_left = 0 THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND (v_left = 0);
+
+    -- ...and the window-INDEPENDENT change stayed: it is the MVP badge.
+    v_ok := EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_name = 'price_refs'
+                       AND column_name = 'price_change_pct');
+    RAISE NOTICE 'N8 price_change_pct kept (window-free) : %',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND v_ok;
+
+    -- (2) The preset is a COLUMN OF THE RESULT, not a column of the table.
+    --     (Checked after the fixture: on an empty price_refs the view has no
+    --     rows at all, and "0 distinct presets" would be the correct answer to
+    --     the wrong question.)
+
+    INSERT INTO users (name, email) VALUES ('Window Test', 'window@example.com')
+        RETURNING id INTO v_user;
+    INSERT INTO stores (name, cnpj, ibge_code, trade_name)
+        VALUES ('Window Store', '00000000000002', '3550308', 'WSTORE')
+        RETURNING id INTO v_store;
+    INSERT INTO products (name, category_id, brand, base_unit)
+        SELECT 'Window test product', id, 'WinB', 'G' FROM categories LIMIT 1
+        RETURNING id INTO v_prod;
+
+    INSERT INTO price_refs (user_id, product_id, store_id, ref_date, base_unit,
+                            base_price, price_change_pct) VALUES
+        (v_user, v_prod, v_store, DATE '2026-01-01', 'G', 10.00, NULL),
+        (v_user, v_prod, v_store, DATE '2026-01-10', 'G', 12.00, 20.00),
+        (v_user, v_prod, v_store, DATE '2026-06-01', 'G', 20.00, 66.67),
+        (v_user, v_prod, v_store, DATE '2026-06-05', 'G', 20.00, NULL);
+
+    SELECT count(DISTINCT window_days) INTO v_n FROM v_price_window;
+    RAISE NOTICE 'N8 presets are rows (5 of them)       : % (%)',
+        CASE WHEN v_n = 5 THEN 'PASS' ELSE 'FAIL' END, v_n;
+    v_pass := v_pass AND (v_n = 5);
+
+    -- (3) One sample means NO variation: NULL, never 0. Two samples of the same
+    --     price mean a 0.00 that IS true.
+    SELECT count(*) INTO v_n FROM v_price_window
+     WHERE (samples >= 2 AND price_spread_pct IS NULL)
+        OR (samples <  2 AND price_spread_pct IS NOT NULL);
+    RAISE NOTICE 'N8 samples>=2 iff spread present      : %',
+        CASE WHEN v_n = 0 THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND (v_n = 0);
+
+    -- (4) Two presets in the SAME query, on the same observation.
+    SELECT max(price_spread_pct) FILTER (WHERE window_days = 7),
+           max(price_spread_pct) FILTER (WHERE window_days = 365),
+           max(samples)          FILTER (WHERE window_days = 7),
+           max(samples)          FILTER (WHERE window_days = 365)
+      INTO v_s1, v_s2, v_x1, v_x2
+      FROM v_price_window
+     WHERE product_id = v_prod AND ref_date = DATE '2026-06-05';
+    v_ok := (v_x1 = 2 AND v_x2 = 4 AND v_s1 = 0.00 AND v_s2 = 100.00);
+    RAISE NOTICE 'N8 7d and 365d in one query          : % (samples %->%, spread %->%)',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END, v_x1, v_x2, v_s1, v_s2;
+    v_pass := v_pass AND v_ok;
+
+    -- (5) The single-sample window: one observation, no variation.
+    SELECT samples, price_spread_pct INTO v_x1, v_s1
+      FROM v_price_window
+     WHERE product_id = v_prod AND ref_date = DATE '2026-01-01'
+       AND window_days = 7;
+    v_ok := (v_x1 = 1 AND v_s1 IS NULL);
+    RAISE NOTICE 'N8 single-sample window is NULL      : % (samples=%, spread=%)',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END, v_x1,
+        coalesce(v_s1::text, 'NULL');
+    v_pass := v_pass AND v_ok;
+
+    -- (6) Windows nest: a wider window never holds fewer observations.
+    SELECT count(*) INTO v_n
+      FROM v_price_window a JOIN v_price_window b
+        ON b.product_id = a.product_id AND b.store_id = a.store_id
+       AND b.ref_date = a.ref_date AND b.window_days > a.window_days
+     WHERE a.product_id = v_prod AND b.samples < a.samples;
+    RAISE NOTICE 'N8 windows are monotone              : %',
+        CASE WHEN v_n = 0 THEN 'PASS' ELSE 'FAIL' END;
+    v_pass := v_pass AND (v_n = 0);
+
+    -- (7) price_window(): the window is a PARAMETER -- two presets, one query.
+    SELECT max(w.samples) FILTER (WHERE d.w = 7),
+           max(w.samples) FILTER (WHERE d.w = 365)
+      INTO v_x1, v_x2
+      FROM (VALUES (7), (365)) AS d(w)
+      CROSS JOIN LATERAL price_window(v_user, d.w) w
+     WHERE w.product_id = v_prod;
+    v_ok := (v_x1 = 2 AND v_x2 = 4);
+    RAISE NOTICE 'N8 price_window(7) vs (365) one query: % (% vs %)',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END, v_x1, v_x2;
+    v_pass := v_pass AND v_ok;
+
+    -- (8) A pair with nothing in the window comes back LOUD: samples 0, no
+    --     prices, coverage NO_OBSERVATIONS -- not an absent row.
+    SELECT samples, coverage, price_spread_pct, base_price
+      INTO v_x1, v_cov, v_s1, v_s2
+      FROM price_window(v_user, 7, DATE '2026-07-01')
+     WHERE product_id = v_prod;
+    v_ok := (v_x1 = 0 AND v_cov = 'NO_OBSERVATIONS'
+             AND v_s1 IS NULL AND v_s2 IS NULL);
+    RAISE NOTICE 'N8 empty window is visible           : % (samples=%, coverage=%)',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END, v_x1, coalesce(v_cov, 'NULL');
+    v_pass := v_pass AND v_ok;
+
+    -- (9) The anchor defaults to the user's OWN latest observation, never to
+    --     current_date: the fixture is historical and must still answer.
+    SELECT max(samples) INTO v_x1 FROM price_window(v_user, 365) WHERE product_id = v_prod;
+    v_ok := (v_x1 = 4);
+    RAISE NOTICE 'N8 anchor is the last observation    : % (365d samples=%)',
+        CASE WHEN v_ok THEN 'PASS' ELSE 'FAIL' END, v_x1;
+    v_pass := v_pass AND v_ok;
+
+    IF v_pass THEN
+        RAISE NOTICE 'N8 RESULT: PASS (the window is a query, the preset a parameter)';
+    ELSE
+        RAISE NOTICE 'N8 RESULT: FAIL';
+    END IF;
+END $$;
+
+SELECT 'N8' AS test,
+       (SELECT count(*) FROM v_price_window) AS window_rows,
+       (SELECT count(DISTINCT window_days) FROM v_price_window) AS presets,
+       (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname = 'public' AND p.proname = 'price_window') AS window_fns,
+       CASE WHEN (SELECT count(*) FROM v_price_window) = 20
+             AND (SELECT count(DISTINCT window_days) FROM v_price_window) = 5
+             AND (SELECT count(*) FROM pg_proc p
+                    JOIN pg_namespace n ON n.oid = p.pronamespace
+                   WHERE n.nspname = 'public' AND p.proname = 'price_window') = 1
+            THEN 'PASS' ELSE 'FAIL' END AS result;
+
+-- -----------------------------------------------------------------------------
 -- N6: LGPD retention -- the register decides, the queue obeys (internal task)
 -- -----------------------------------------------------------------------------
 -- Runs before N2: this block inserts audit_log and staging fixtures, and N2 is

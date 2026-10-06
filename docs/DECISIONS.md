@@ -77,8 +77,11 @@ Estas estão documentadas nos ADRs e são candidatas a trabalho, não a esquecim
    não a apaga. Enquanto não houver expurgo, uma exclusão não é completa. → ADR-0005
 2. **O isolamento por `user_id` é disciplina, não restrição.** Nenhuma view nova é impedida de
    omitir o filtro. → ADR-0004
-3. **`price_refs.min_30d` / `max_30d` não têm número mínimo de amostras.** Um alerta de queda
-   sobre uma única compra é ficção. → ADR-0003
+3. **O número mínimo de amostras antes de uma janela gerar alerta não está decidido.** Um alerta
+   de queda sobre uma única compra é ficção. A decisão D10 tirou as colunas `min_30d`/`max_30d`
+   (a janela virou consulta, `db/016`), então o que existe hoje é a contagem da janela
+   (`samples`) e uma regra fixa: abaixo de 2 observações não há variação — NULL, nunca 0. O
+   mínimo continua sendo decisão de produto. → ADR-0003
 4. **Os mapeamentos de unidade não se propagam entre emissores.** Uma filial nova do mesmo
    Supermarket G exigiu revisão separada, corretamente. → ADR-0003
 5. **`audit_log` retém JSONB e não tem política de expurgo.** → ADR-0005

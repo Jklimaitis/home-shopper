@@ -1,20 +1,28 @@
 # ERD — home_shopper
 
-Generated from the schema applied on PostgreSQL 16: **20 tables, 8 views,
-67 indexes, 22 triggers, 8 enums**. Measured on **2026-10-05** in a disposable
-database that applied `db/001_schema.sql` … `db/013_price_refs_sample_count.sql`
+Generated from the schema applied on PostgreSQL 16: **20 tables, 9 views,
+67 indexes, 23 triggers, 8 enums**. Measured on **2026-10-06** in a disposable
+database that applied `db/001_schema.sql` … `db/016_price_window_view.sql`
 in order (`information_schema.tables`, `information_schema.views`, `pg_indexes`,
 `information_schema.triggers`, `pg_type`/`pg_enum` in schema `public`), and
 reproduced identically on a clone of the canonical data. Every constraint is
 named (`pk_`, `fk_`, `uk_`, `ck_`).
 
-This diagram documents what is **implemented** (`db/001`–`db/013`). Migrations
-`db/007`–`db/013` — category attributes and rules, the review decision on
+This diagram documents what is **implemented** (`db/001`–`db/016`). Migrations
+`db/007`–`db/016` — category attributes and rules, the review decision on
 `staging_lines`, catalogue write requests, the LGPD retention register, the
-catalogue coverage after an erasure, the `users.email` constraints and
-`price_refs.samples_30d` — are integrated into that chain. The entity boxes below
+catalogue coverage after an erasure, the `users.email` constraints,
+`price_refs.samples_30d`, the two variation columns of decision D9, the
+presentation link on `staging_lines`, and the price window as a query (decision
+D10) — are integrated into that chain. The entity boxes below
 still cover the `db/001`–`db/006` base; the structures added since are specified
 in the migration files and in `<internal review>`.
+
+**The price window is not in this diagram, on purpose.** `db/016` (decision D10) left
+`price_refs` holding only the observation, and the aggregation over a window became a
+query: `v_price_window` (one row per observation × screen preset) and `price_window()`
+(one row per product/store pair, window as a parameter). See
+`<internal record>` §3 for the contract and the measurements.
 
 ```mermaid
 erDiagram
@@ -176,10 +184,7 @@ erDiagram
         date      ref_date
         numeric   base_price
         enum      base_unit
-        numeric   min_30d
-        numeric   max_30d
-        numeric   var_pct_30d "NULL: ADR-0003 does not define the formula"
-        integer   samples_30d "aggregated points in the 30d window"
+        numeric   price_change_pct "signed, vs the previous observation; NULL when not comparable"
         timestamptz updated_at
     }
 
