@@ -15,19 +15,28 @@ BEGIN;
 -- -----------------------------------------------------------------------------
 -- Fixtures
 -- -----------------------------------------------------------------------------
-INSERT INTO users (name, email) VALUES ('Test User', 'test@example.com');
+-- Determinism rule: every single-row read below is pinned to the row THIS file
+-- inserted -- the id captured by \gset (fx_user, fx_store, fx_category,
+-- fx_receipt, fx_note) or the fixture's own natural key. An unfiltered
+-- "(SELECT id FROM stores)" aborts with "more than one row returned by a
+-- subquery used as an expression" as soon as the database already holds a
+-- second store, which the canonical does (7).
+INSERT INTO users (name, email) VALUES ('Test User', 'test@example.com')
+    RETURNING id AS fx_user \gset
 
 INSERT INTO stores (name, cnpj, ibge_code, trade_name) VALUES
-    ('Store Alpha', '00000000000191', '3550308', 'ALPHA');
+    ('Store Alpha', '00000000000191', '3550308', 'ALPHA')
+    RETURNING id AS fx_store \gset
 
-INSERT INTO categories (name) VALUES ('Meat and cold cuts');
+INSERT INTO categories (name) VALUES ('Meat and cold cuts')
+    RETURNING id AS fx_category \gset
 
 -- Base unit G: the whole receipt is mass.
 INSERT INTO products (name, category_id, brand, base_unit) VALUES
-    ('Chicken leg Swift',   (SELECT id FROM categories), 'Swift', 'G'),
-    ('Surimi sticks Swift', (SELECT id FROM categories), 'Swift', 'G'),
-    ('Minced beef Combo',   (SELECT id FROM categories), 'Combo', 'G'),
-    ('Beef tripe Combo',    (SELECT id FROM categories), 'Combo', 'G');
+    ('Chicken leg Swift',   :'fx_category'::uuid, 'Swift', 'G'),
+    ('Surimi sticks Swift', :'fx_category'::uuid, 'Swift', 'G'),
+    ('Minced beef Combo',   :'fx_category'::uuid, 'Combo', 'G'),
+    ('Beef tripe Combo',    :'fx_category'::uuid, 'Combo', 'G');
 
 INSERT INTO synonyms (term, expands_to) VALUES
     ('herc',  'hercules'),
@@ -41,12 +50,12 @@ INSERT INTO synonyms (term, expands_to) VALUES
 -- pointing at the form (decision J1).
 INSERT INTO presentations (product_id, sale_unit_recognized, content_kind,
                            content_quantity, content_unit, factor_base) VALUES
- ((SELECT id FROM products WHERE name='Chicken leg Swift'),   'KG', 'VARIABLE', NULL, NULL, 1000),
- ((SELECT id FROM products WHERE name='Surimi sticks Swift'), 'PC', 'FIXED',     250, 'G',   250),
- ((SELECT id FROM products WHERE name='Minced beef Combo'),   'KG', 'VARIABLE', NULL, NULL, 1000),
+ ((SELECT id FROM products WHERE name='Chicken leg Swift' AND brand='Swift'),   'KG', 'VARIABLE', NULL, NULL, 1000),
+ ((SELECT id FROM products WHERE name='Surimi sticks Swift' AND brand='Swift'), 'PC', 'FIXED',     250, 'G',   250),
+ ((SELECT id FROM products WHERE name='Minced beef Combo' AND brand='Combo'),   'KG', 'VARIABLE', NULL, NULL, 1000),
  -- By weight: the form is SOLD BY WEIGHT. The factor is the PRICE REFERENCE
  -- (1 kg = 1000 g); the weight actually bought goes in the line quantity.
- ((SELECT id FROM products WHERE name='Beef tripe Combo'),    'KG', 'VARIABLE', NULL, NULL, 1000);
+ ((SELECT id FROM products WHERE name='Beef tripe Combo' AND brand='Combo'),    'KG', 'VARIABLE', NULL, NULL, 1000);
 
 -- Several stores may spell the same form differently; each spelling is one
 -- source row. Here all four are global (store_id NULL), so they must differ on
@@ -65,8 +74,9 @@ JOIN presentations pr ON pr.product_id = p.id;
 
 INSERT INTO staging_receipts (user_id, source, source_ref, store_id,
                               total_gross, discount_total, amount_paid) VALUES
- ((SELECT id FROM users), 'SEFAZ', '00000000000000000000000000000000000000000000',
-  (SELECT id FROM stores), 337.00, 0.00, 337.00);
+ (:'fx_user'::uuid, 'SEFAZ', '00000000000000000000000000000000000000000000',
+  :'fx_store'::uuid, 337.00, 0.00, 337.00)
+    RETURNING id AS fx_receipt \gset
 
 -- The 4 lines that have a presentation; the other 10 have none and
 -- exercise the unmatched path. All 14 line totals come from the same
@@ -74,36 +84,36 @@ INSERT INTO staging_receipts (user_id, source, source_ref, store_id,
 INSERT INTO staging_lines (receipt_id, line_no, description_raw, store_code,
                            sale_unit, quantity, unit_price, discount_line,
                            line_total, product_id, presentation_id, match_source) VALUES
-((SELECT id FROM staging_receipts), 1, 'COXA DE FRANGO SWIFT 1 kg', '6169180',
+(:'fx_receipt'::uuid, 1, 'COXA DE FRANGO SWIFT 1 kg', '6169180',
  'pc', 1, 11.90, 0, 11.90,
- (SELECT id FROM products WHERE name='Chicken leg Swift'),
- (SELECT presentation_id FROM presentation_sources WHERE description_raw LIKE 'COXA%'), 'DESCRIPTION'),
-((SELECT id FROM staging_receipts), 5, 'CARNE MOIDA COMBO 1kg', '6220110',
+ (SELECT id FROM products WHERE name='Chicken leg Swift' AND brand='Swift'),
+ (SELECT presentation_id FROM presentation_sources WHERE description_raw = 'COXA DE FRANGO SWIFT 1 kg' AND store_id IS NULL), 'DESCRIPTION'),
+(:'fx_receipt'::uuid, 5, 'CARNE MOIDA COMBO 1kg', '6220110',
  'pc', 1, 29.90, 0, 29.90,
- (SELECT id FROM products WHERE name='Minced beef Combo'),
- (SELECT presentation_id FROM presentation_sources WHERE description_raw LIKE 'CARNE%'), 'DESCRIPTION'),
-((SELECT id FROM staging_receipts), 6, 'KANI KAMA SWIFT 250 g', '6187250',
+ (SELECT id FROM products WHERE name='Minced beef Combo' AND brand='Combo'),
+ (SELECT presentation_id FROM presentation_sources WHERE description_raw = 'CARNE MOIDA COMBO 1kg' AND store_id IS NULL), 'DESCRIPTION'),
+(:'fx_receipt'::uuid, 6, 'KANI KAMA SWIFT 250 g', '6187250',
  'pc', 1, 10.90, 0, 10.90,
- (SELECT id FROM products WHERE name='Surimi sticks Swift'),
- (SELECT presentation_id FROM presentation_sources WHERE description_raw LIKE 'KANI%'), 'DESCRIPTION'),
-((SELECT id FROM staging_receipts), 8, 'CUPIM COMBO kg', '6221920',
+ (SELECT id FROM products WHERE name='Surimi sticks Swift' AND brand='Swift'),
+ (SELECT presentation_id FROM presentation_sources WHERE description_raw = 'KANI KAMA SWIFT 250 g' AND store_id IS NULL), 'DESCRIPTION'),
+(:'fx_receipt'::uuid, 8, 'CUPIM COMBO kg', '6221920',
  'kg', 1.446, 39.90, 0, 57.70,
- (SELECT id FROM products WHERE name='Beef tripe Combo'),
- (SELECT presentation_id FROM presentation_sources WHERE description_raw LIKE 'CUPIM%'), 'MANUAL');
+ (SELECT id FROM products WHERE name='Beef tripe Combo' AND brand='Combo'),
+ (SELECT presentation_id FROM presentation_sources WHERE description_raw = 'CUPIM COMBO kg' AND store_id IS NULL), 'MANUAL');
 
 -- 10 lines with no product: the review-queue tail.
 INSERT INTO staging_lines (receipt_id, line_no, description_raw, store_code,
                            sale_unit, quantity, unit_price, discount_line, line_total) VALUES
-((SELECT id FROM staging_receipts), 2, 'PALITINHO DE TAPIOCA NUU 300 g', '6222760','pc',1,14.90,0,14.90),
-((SELECT id FROM staging_receipts), 3, 'BIFE DO VAZIO IQF SWIFT 1kg', '6217690','pc',1,45.90,0,45.90),
-((SELECT id FROM staging_receipts), 4, 'MILHO MEIA ESPIGA SWIFT 1,02 kg', '6232250','pc',1,18.90,0,18.90),
-((SELECT id FROM staging_receipts), 7, 'COSTELA DIANTEIRO CUBOS SWIFT 1 kg', '6213940','pc',1,42.90,0,42.90),
-((SELECT id FROM staging_receipts), 9, 'MANDIOCA TOLETE SWIFT 1,02 kg', '6232010','pc',1,13.90,0,13.90),
-((SELECT id FROM staging_receipts), 10, 'FILE DE PEITO BDJ SEARA 1 kg', '6229530','pc',1,18.90,0,18.90),
-((SELECT id FROM staging_receipts), 11, 'FILE DE POLACA DO ALASKA SWIFT 500 g', '6224930','pc',1,17.90,0,17.90),
-((SELECT id FROM staging_receipts), 12, 'FILE DE PESCADA SWIFT 500 g', '6171010','pc',1,24.90,0,24.90),
-((SELECT id FROM staging_receipts), 13, 'MOELA FRANGO ALM SEARA 1 kg', '6169080','pc',1,15.50,0,15.50),
-((SELECT id FROM staging_receipts), 14, 'SOBRECOHA DE FRANGO SWIFT 1 kg', '6169190','pc',1,12.90,0,12.90);
+(:'fx_receipt'::uuid, 2, 'PALITINHO DE TAPIOCA NUU 300 g', '6222760','pc',1,14.90,0,14.90),
+(:'fx_receipt'::uuid, 3, 'BIFE DO VAZIO IQF SWIFT 1kg', '6217690','pc',1,45.90,0,45.90),
+(:'fx_receipt'::uuid, 4, 'MILHO MEIA ESPIGA SWIFT 1,02 kg', '6232250','pc',1,18.90,0,18.90),
+(:'fx_receipt'::uuid, 7, 'COSTELA DIANTEIRO CUBOS SWIFT 1 kg', '6213940','pc',1,42.90,0,42.90),
+(:'fx_receipt'::uuid, 9, 'MANDIOCA TOLETE SWIFT 1,02 kg', '6232010','pc',1,13.90,0,13.90),
+(:'fx_receipt'::uuid, 10, 'FILE DE PEITO BDJ SEARA 1 kg', '6229530','pc',1,18.90,0,18.90),
+(:'fx_receipt'::uuid, 11, 'FILE DE POLACA DO ALASKA SWIFT 500 g', '6224930','pc',1,17.90,0,17.90),
+(:'fx_receipt'::uuid, 12, 'FILE DE PESCADA SWIFT 500 g', '6171010','pc',1,24.90,0,24.90),
+(:'fx_receipt'::uuid, 13, 'MOELA FRANGO ALM SEARA 1 kg', '6169080','pc',1,15.50,0,15.50),
+(:'fx_receipt'::uuid, 14, 'SOBRECOHA DE FRANGO SWIFT 1 kg', '6169190','pc',1,12.90,0,12.90);
 
 -- -----------------------------------------------------------------------------
 -- A1: accounting checksum against the a receipt
@@ -112,7 +122,8 @@ INSERT INTO staging_lines (receipt_id, line_no, description_raw, store_code,
 \echo '--- A1: checksum (a receipt: 14 lines, total 337.00) ---'
 SELECT 'A1' AS test, total_gross, total_computed, divergence_cents,
        CASE WHEN abs(divergence_cents) <= 1 THEN 'PASS' ELSE 'FAIL' END AS result
-FROM staging_receipts;
+FROM staging_receipts
+ WHERE id = :'fx_receipt'::uuid;
 
 -- -----------------------------------------------------------------------------
 -- A2: the discount lives in the totals, not in the lines
@@ -155,18 +166,22 @@ INSERT INTO purchase_notes (user_id, store_id, staging_receipt_id, access_key,
     SELECT user_id, store_id, id,
            '00000000000000000000000000000000000000000000',
            DATE '2026-07-10', amount_paid
-      FROM staging_receipts;
+      FROM staging_receipts
+     WHERE id = :'fx_receipt'::uuid
+    RETURNING id AS fx_note \gset
 
 INSERT INTO line_items (note_id, product_id, presentation_id, line_no,
                         unit_price, quantity, discount_line, line_total)
-    SELECT (SELECT id FROM purchase_notes), product_id, presentation_id, line_no,
+    SELECT :'fx_note'::uuid, product_id, presentation_id, line_no,
            unit_price, quantity, discount_line, line_total
       FROM staging_lines
-     WHERE product_id IS NOT NULL;
+     WHERE product_id IS NOT NULL
+       AND receipt_id = :'fx_receipt'::uuid;
 
 SELECT 'A3' AS test, count(*) AS consolidated_lines,
        CASE WHEN count(*) = 4 THEN 'PASS' ELSE 'FAIL' END AS result
-FROM line_items;
+FROM line_items
+WHERE note_id = :'fx_note'::uuid;
 
 -- -----------------------------------------------------------------------------
 -- A4: base price makes 250 g and 1 kg comparable
@@ -180,6 +195,7 @@ SELECT 'A4' AS test, p.name, i.quantity, i.unit_price, pr.factor_base,
 FROM line_items i
 JOIN products p       ON p.id = i.product_id
 JOIN presentations pr ON pr.id = i.presentation_id
+WHERE i.note_id = :'fx_note'::uuid
 ORDER BY p.name;
 
 -- -----------------------------------------------------------------------------
@@ -191,8 +207,11 @@ BEGIN
     BEGIN
         INSERT INTO line_items (note_id, product_id, presentation_id, line_no,
                                 unit_price, quantity, discount_line, line_total)
-        SELECT (SELECT id FROM purchase_notes), p.id, NULL, 99, 10.00, 1, 0, 10.00
-          FROM products p LIMIT 1;
+        SELECT (SELECT id FROM purchase_notes
+                 WHERE access_key = '00000000000000000000000000000000000000000000'),
+               p.id, NULL, 99, 10.00, 1, 0, 10.00
+          FROM products p
+         WHERE p.name = 'Chicken leg Swift' AND p.brand = 'Swift';
     EXCEPTION WHEN check_violation OR not_null_violation THEN
         v_result := 'PASS (refused)';
     END;
@@ -209,7 +228,8 @@ BEGIN
         INSERT INTO purchase_notes (user_id, store_id, access_key,
                                     purchase_date, amount_paid)
         SELECT user_id, store_id, access_key, purchase_date, amount_paid
-          FROM purchase_notes LIMIT 1;
+          FROM purchase_notes
+         WHERE access_key = '00000000000000000000000000000000000000000000';
     EXCEPTION WHEN unique_violation THEN
         v_result := 'PASS (duplicate blocked)';
     END;
@@ -234,7 +254,12 @@ SELECT 'A8' AS test,
        count(*) FILTER (WHERE table_name='purchase_notes' AND operation='INSERT') AS notes,
        count(*) FILTER (WHERE table_name='line_items'    AND operation='INSERT') AS items,
        CASE WHEN count(*) = 5 THEN 'PASS' ELSE 'FAIL' END AS result
-FROM audit_log;
+FROM audit_log
+-- The trail of a loaded database is not this test's business: only the
+-- rows this file audited (the fixture note and its four lines) count.
+WHERE (table_name = 'purchase_notes' AND record_id = :'fx_note'::uuid)
+   OR (table_name = 'line_items'
+       AND record_id IN (SELECT id FROM line_items WHERE note_id = :'fx_note'::uuid));
 
 -- -----------------------------------------------------------------------------
 -- A9: the review queue
@@ -243,7 +268,8 @@ FROM audit_log;
 \echo '--- A9: review queue (lines with no product) ---'
 SELECT 'A9' AS test, lines_to_review, unmatched_lines, total_lines,
        CASE WHEN unmatched_lines = 10 THEN 'PASS' ELSE 'FAIL' END AS result
-FROM v_review_queue;
+FROM v_review_queue
+WHERE staging_receipt_id = :'fx_receipt'::uuid;
 
 -- -----------------------------------------------------------------------------
 -- A10: views respond
@@ -251,10 +277,14 @@ FROM v_review_queue;
 SELECT 'A10' AS test,
        (SELECT count(*) FROM v_current_prices)   AS current_prices,
        (SELECT count(*) FROM v_best_price)       AS best_price,
-       (SELECT count(*) FROM v_monthly_spend)    AS monthly_spend,
-       (SELECT count(*) FROM v_review_queue)     AS review_queue,
+       (SELECT count(*) FROM v_monthly_spend
+         WHERE user_id = :'fx_user'::uuid)       AS monthly_spend,
+       (SELECT count(*) FROM v_review_queue
+         WHERE staging_receipt_id = :'fx_receipt'::uuid) AS review_queue,
        (SELECT count(*) FROM v_price_aggregation) AS aggregation,
-       CASE WHEN (SELECT count(*) FROM v_monthly_spend) = 1 THEN 'PASS' ELSE 'FAIL' END AS result;
+       CASE WHEN (SELECT count(*) FROM v_monthly_spend
+                   WHERE user_id = :'fx_user'::uuid) = 1
+            THEN 'PASS' ELSE 'FAIL' END AS result;
 
 -- -----------------------------------------------------------------------------
 -- R1: the match key keeps the text and does not collide
@@ -269,7 +299,7 @@ SELECT 'A10' AS test,
 DO $$
 DECLARE v_coxa TEXT; v_moela_calc TEXT;
 BEGIN
-    SELECT match_key INTO v_coxa FROM presentation_sources WHERE description_raw LIKE 'COXA%';
+    SELECT match_key INTO v_coxa FROM presentation_sources WHERE description_raw = 'COXA DE FRANGO SWIFT 1 kg' AND store_id IS NULL;
     v_moela_calc := regexp_replace(lower('MOELA FRANGO ALM SEARA 1 kg'), '[^a-z0-9]+', ' ', 'g');
 
     RAISE NOTICE 'R1 coxa  (from db)  : [%]', v_coxa;
@@ -294,7 +324,8 @@ DECLARE v_blocked BOOLEAN := false;
 BEGIN
     BEGIN
         INSERT INTO products (name, category_id, brand, base_unit)
-        SELECT 'Surimi sticks Swift', id, 'Swift', 'G' FROM categories LIMIT 1;
+        SELECT 'Surimi sticks Swift', id, 'Swift', 'G'
+          FROM categories WHERE name = 'Meat and cold cuts';
     EXCEPTION WHEN unique_violation THEN v_blocked := true;
     END;
     RAISE NOTICE 'R2 duplicate blocked: %', CASE WHEN v_blocked THEN 'PASS' ELSE 'FAIL' END;
@@ -321,13 +352,14 @@ BEGIN
         RETURNING id INTO v_user;
 
     INSERT INTO purchase_notes (user_id, store_id, purchase_date, amount_paid)
-        SELECT v_user, id, CURRENT_DATE, 50.00 FROM stores LIMIT 1;
+        SELECT v_user, id, CURRENT_DATE, 50.00
+          FROM stores WHERE cnpj = '00000000000191';
     INSERT INTO line_items (note_id, product_id, presentation_id, line_no,
                             unit_price, quantity, discount_line, line_total)
         SELECT (SELECT id FROM purchase_notes WHERE user_id = v_user),
                p.id, pr.id, 1, 10.90, 1, 0, 10.90
           FROM products p JOIN presentations pr ON pr.product_id = p.id
-         WHERE p.name = 'Surimi sticks Swift' LIMIT 1;
+         WHERE p.name = 'Surimi sticks Swift' AND p.brand = 'Swift' LIMIT 1;
 
     -- The API path: app.user_id is set by the request middleware.
     PERFORM set_config('app.user_id', v_user::text, true);
@@ -366,7 +398,8 @@ DO $$
 DECLARE v_product UUID; v_no_col BOOLEAN; v_code_in_staging BOOLEAN;
 BEGIN
     INSERT INTO products (name, category_id, brand, base_unit)
-        SELECT 'Ground coffee', id, 'Cafe', 'G' FROM categories LIMIT 1
+        SELECT 'Ground coffee', id, 'Cafe', 'G'
+          FROM categories WHERE name = 'Meat and cold cuts'
         RETURNING id INTO v_product;
     INSERT INTO presentations (product_id, sale_unit_recognized, content_kind,
                                content_quantity, content_unit, factor_base)
@@ -428,7 +461,7 @@ BEGIN
     v_bad := false;
     BEGIN
         INSERT INTO presentations (product_id, content_kind, content_quantity, factor_base)
-            VALUES ((SELECT id FROM products WHERE name='Ground coffee'), 'FIXED', NULL, 1);
+            VALUES ((SELECT id FROM products WHERE name='Ground coffee' AND brand='Cafe'), 'FIXED', NULL, 1);
     EXCEPTION WHEN check_violation THEN v_bad := true;
     END;
     RAISE NOTICE 'N1 FIXED without quantity refused : %',
@@ -437,7 +470,7 @@ BEGIN
 
     -- GTIN lives per presentation now: format accepted, malformed refused.
     SELECT presentation_id INTO v_pres
-      FROM presentation_sources WHERE description_raw LIKE 'KANI%';
+      FROM presentation_sources WHERE description_raw = 'KANI KAMA SWIFT 250 g' AND store_id IS NULL;
     INSERT INTO presentation_identifiers (presentation_id, gtin)
         VALUES (v_pres, '7891000100103');
     v_bad := false;
@@ -453,7 +486,8 @@ BEGIN
     -- A captured label with a space is a fiscal fact, not a schema error:
     -- the loosened sale-unit check lets it reach review instead of the bin.
     INSERT INTO staging_receipts (user_id, source, total_gross, discount_total, amount_paid)
-        VALUES ((SELECT id FROM users LIMIT 1), 'MANUAL', 10, 0, 10)
+        VALUES ((SELECT id FROM users WHERE email = 'test@example.com'),
+                'MANUAL', 10, 0, 10)
         RETURNING id INTO v_receipt;
     INSERT INTO staging_lines (receipt_id, line_no, description_raw, sale_unit,
                                quantity, unit_price, line_total)
@@ -505,10 +539,10 @@ DECLARE
     v_pass  BOOLEAN := true;
 BEGIN
     SELECT presentation_id INTO v_pres
-      FROM presentation_sources WHERE description_raw LIKE 'KANI%';
+      FROM presentation_sources WHERE description_raw = 'KANI KAMA SWIFT 250 g' AND store_id IS NULL;
     SELECT product_id INTO v_prod FROM presentations WHERE id = v_pres;
-    SELECT n.user_id, n.store_id INTO v_user, v_store
-      FROM purchase_notes n LIMIT 1;
+    SELECT id INTO v_user  FROM users  WHERE email = 'test@example.com';
+    SELECT id INTO v_store FROM stores WHERE cnpj  = '00000000000191';
 
     -- A note WITH a line: before 006 an identifier could point at neither, and
     -- the origin has to be a real line, not just a plausible number.
@@ -625,11 +659,11 @@ DECLARE
     v_pres2 UUID;
     v_line3 UUID;
 BEGIN
-    SELECT id INTO v_user  FROM users  ORDER BY created_at LIMIT 1;
-    SELECT id INTO v_store FROM stores ORDER BY created_at LIMIT 1;
+    SELECT id INTO v_user  FROM users  WHERE email = 'test@example.com';
+    SELECT id INTO v_store FROM stores WHERE cnpj  = '00000000000191';
     SELECT p.id, pr.id INTO v_prod, v_pres
       FROM products p JOIN presentations pr ON pr.product_id = p.id
-     WHERE p.name = 'Surimi sticks Swift' LIMIT 1;
+     WHERE p.name = 'Surimi sticks Swift' AND p.brand = 'Swift' LIMIT 1;
 
     INSERT INTO staging_receipts (user_id, source, store_id,
                                   total_gross, discount_total, amount_paid)
@@ -1273,12 +1307,19 @@ BEGIN
     END IF;
 END $$;
 
+-- Fixture-scoped on purpose: 20 rows are the 4 observations THIS block inserted
+-- (window@example.com) x the 5 presets. An unscoped count(*) answers with the
+-- whole database -- 2420 rows on a clone of the canonical, which holds 480
+-- price_refs -- and reports FAIL on a perfectly good schema. Same determinism
+-- rule as the header of this file: every count pinned to the fixture's own rows.
 SELECT 'N8' AS test,
-       (SELECT count(*) FROM v_price_window) AS window_rows,
+       (SELECT count(*) FROM v_price_window
+         WHERE user_id = (SELECT id FROM users WHERE email='window@example.com')) AS window_rows,
        (SELECT count(DISTINCT window_days) FROM v_price_window) AS presets,
        (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
          WHERE n.nspname = 'public' AND p.proname = 'price_window') AS window_fns,
-       CASE WHEN (SELECT count(*) FROM v_price_window) = 20
+       CASE WHEN (SELECT count(*) FROM v_price_window
+                   WHERE user_id = (SELECT id FROM users WHERE email='window@example.com')) = 20
              AND (SELECT count(DISTINCT window_days) FROM v_price_window) = 5
              AND (SELECT count(*) FROM pg_proc p
                     JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -1479,7 +1520,7 @@ DECLARE
     v_tmp    BOOLEAN;
     v_pass   BOOLEAN := true;
 BEGIN
-    SELECT id INTO v_store FROM stores LIMIT 1;
+    SELECT id INTO v_store FROM stores WHERE cnpj = '00000000000191';
     INSERT INTO users (name, email) VALUES ('Immutability Test', 'c2@example.com')
         RETURNING id INTO v_user;
 
