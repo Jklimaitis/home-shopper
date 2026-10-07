@@ -5,10 +5,10 @@
 --
 -- internal task.
 --
--- STATUS: PROPOSAL. NOT APPLIED to the canonical database (home_shopper-db) and
---   NOT merged. It exists so the design can be reviewed before any "go" from
---   Jonas. The classification of every gap (L1..L9) -- including the ones that
---   are NOT a table -- is in
+-- STATUS: APPLIED to the canonical database (home_shopper-db) and MERGED.
+--   Merged in <internal PR> (commit 19015a2). Applied to the canonical database
+--   on 2026-10-06. The classification of every gap (L1..L9) -- including
+--   the ones that are NOT a table -- is in
 --   <internal review>.
 --
 -- WHY A NEW FILE AND NOT AN EDIT OF 001-006
