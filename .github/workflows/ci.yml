@@ -57,11 +57,10 @@ jobs:
           PGPASSWORD: ci
         run: |
           set -euo pipefail
-          for f in seeds/*.sql; do
-            echo "::group::$f"
-            psql -h localhost -U home_shopper -d home_shopper -v ON_ERROR_STOP=1 -f "$f"
-            echo "::endgroup::"
-          done
+          # Only the categories seed is applied in CI — it is independent of data.
+          # The product classification seed requires 384 products in the database
+          # and is applied manually to the canonical database only.
+          psql -h localhost -U home_shopper -d home_shopper -v ON_ERROR_STOP=1 -f seeds/2026-10-05-categories-and-attributes.sql
 
       - name: Domain tests
         env:
