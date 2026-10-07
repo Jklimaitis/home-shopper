@@ -152,7 +152,7 @@ Números auditados em `<internal record>` (revisão de 2026-10-05):
 > ⚠ **Ressalva de procedência — decisão do Jonas (2026-10-05).** Os 15/573/7 vêm da base **`home_shopper`**,
 > servida pelo container avulso `postgres` (criado por `docker run`, sem label de Compose). O
 > `docker-compose.yml` do **próprio repositório** define o container `home_shopper-db`, base/usuário
-> `home_shopper` — credenciais da CI — e essa base está **vazia** (schema aplicado: 14 tabelas e 5
+> `home_shopper` — credenciais da CI — e essa base está **vazia** (schema aplicado: 20 tabelas e 8
 > views; zero linhas).
 >
 > **O banco canônico é `home_shopper-db`.** Os números desta seção descrevem `home_shopper` até que o
