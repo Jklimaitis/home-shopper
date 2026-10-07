@@ -83,7 +83,7 @@ Nas notas auditadas, **zero** itens traziam EAN. O código de 7 dígitos impress
 - **Zero** atributos estruturados por categoria
 - **Zero** representação de recipiente/tipo de embalagem
 
-**Estado verificado do schema:** 14 tabelas · 5 views · 48 indexes · 14 triggers · 4 enums
+**Estado verificado do schema:** 20 tabelas · 8 views · 67 indexes · 22 triggers · 8 enums
 (`docs/ERD.md`). Schema PostgreSQL 16 aplicado e coberto por testes de domínio
 (`tests/smoke_test.sql`).
 
@@ -114,7 +114,7 @@ produto — não funciona.
 
 | Camada | Estado |
 |---|---|
-| Schema PostgreSQL 16 | **Pronto** — 14 tabelas, 5 views, 48 indexes, 14 triggers |
+| Schema PostgreSQL 16 | **Pronto** — 20 tabelas, 8 views, 67 indexes, 22 triggers, 8 enums |
 | API | **Inexistente** — nenhum endpoint HTTP |
 | Worker / fila | **Inexistente** — sem Celery, sem Redis |
 | Matcher de produtos | **Inexistente** — nenhuma linha de algoritmo |
@@ -316,7 +316,7 @@ aprovada.* Nada entra em `purchase_notes` ou `price_refs` antes da revisão (ADR
 ### 4.1 Diagrama ER
 
 Fonte canônica: **`docs/ERD.md`** — gerado a partir do schema aplicado em PostgreSQL 16.
-**14 tabelas, 5 views, 48 indexes, 14 triggers, 4 enums.** Toda constraint é nomeada
+**20 tabelas, 8 views, 67 indexes, 22 triggers, 8 enums.** Toda constraint é nomeada
 (`pk_`, `fk_`, `uk_`, `ck_`).
 
 ```
