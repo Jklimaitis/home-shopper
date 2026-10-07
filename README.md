@@ -182,6 +182,26 @@ Together they are the **15 notes / 573 lines** of the canonical base. The load
 is idempotent (keyed notes on `(user_id, access_key)`, keyless ones on their
 natural key), so re-running the command above inserts nothing new.
 
+### Apply the seeds
+
+The seeds in `seeds/` are **data** (DML), not schema (DDL). They are applied
+after `db/*.sql` and before the smoke test. The CI does this automatically;
+to apply manually:
+
+```bash
+for f in seeds/*.sql; do
+  psql -h localhost -U home_shopper -d home_shopper -v ON_ERROR_STOP=1 -f "$f"
+done
+```
+
+The seeds are idempotent — re-running them changes nothing. They include
+self-checks that abort if the result doesn't match the expected state.
+
+| Seed | What it does |
+|---|---|
+| `seeds/2026-10-05-categories-and-attributes.sql` | 8 categories + 14 attribute declarations |
+| `seeds/2026-10-06-product-category-classification.sql` | Classifies all 384 products into the 8 categories |
+
 Tests:
 
 ```bash

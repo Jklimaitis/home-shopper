@@ -4,25 +4,27 @@
 --
 -- internal task (card internal task).
 --
--- STATUS: PROPOSTA. NÃO APLICADO ao canônico (`home_shopper-db`) e NÃO mergeado.
---   A aplicação no canônico é passo separado, com go do Jonas.
---
--- O QUE ESTE ARQUIVO FAZ
---   Atribui `products.category_id` para CADA UM dos 384 produtos do catálogo, a partir
---   da evidência verbatim do cupom (`presentation_sources.description_raw`), e registra
---   — na própria linha da tabela de mapeamento — a justificativa de cada decisão.
---   Os 384 saem classificados: NÃO há categoria vazia tolerada. O seed ABORTA se algum
---   produto ficar sem categoria, se o mapeamento não cobrir o catálogo inteiro ou se o
---   resultado não bater com a contagem por categoria.
---
--- POR QUE ISTO NÃO ESTÁ EM db/
---   Mesmo motivo do seed de categorias (`seeds/2026-10-05-categories-and-attributes.sql`):
---   a CI aplica `db/*.sql` em ordem e depois `tests/smoke_test.sql`, que lê
---   `(SELECT id FROM categories)` como escalar. Um seed é DADO, não schema, e não pode
---   quebrar o teste de domínio. Fica fora do glob `db/` e é aplicado à mão:
---
---     docker exec -i home_shopper-db psql -U home_shopper -d home_shopper \
---         -v ON_ERROR_STOP=1 -f - < seeds/2026-10-06-product-category-classification.sql
+STATUS: APPLIED to the canonical database (home_shopper-db) and MERGED.
+  Merged in <internal PR> (commit 841677f). Applied to the canonical database
+  on 2026-10-06 (card internal task, commit d0462c2).
+
+O QUE ESTE ARQUIVO FAZ
+  Atribui `products.category_id` para CADA UM dos 384 produtos do catálogo, a partir
+  da evidência verbatim do cupom (`presentation_sources.description_raw`), e registra
+  — na própria linha da tabela de mapeamento — a justificativa de cada decisão.
+  Os 384 saem classificados: NÃO há categoria vazia tolerada. O seed ABORTA se algum
+  produto ficar sem categoria, se o mapeamento não cobrir o catálogo inteiro ou se o
+  resultado não bater com a contagem por categoria.
+
+POR QUE ISTO NÃO ESTÁ EM db/
+  Mesmo motivo do seed de categorias (`seeds/2026-10-05-categories-and-attributes.sql`):
+  um seed é DADO, não schema. O glob `db/` é para DDL (CREATE TABLE, ALTER TABLE)
+  aplicado em ordem pela CI. Seeds são DML (INSERT INTO) e são aplicados
+  separadamente. A CI aplica `seeds/*.sql` após `db/*.sql` e antes do smoke test.
+  Para aplicar à mão:
+
+    docker exec -i home_shopper-db psql -U home_shopper -d home_shopper \
+        -v ON_ERROR_STOP=1 -f - < seeds/2026-10-06-product-category-classification.sql
 --
 -- DEPENDÊNCIA (aplicar nesta ordem)
 --   1. `db/` na íntegra (na `main` atual, `db/001`..`db/014`).

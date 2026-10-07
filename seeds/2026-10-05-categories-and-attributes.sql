@@ -23,23 +23,16 @@
 --   docs/decisions/2026-10-05-escopo-8-categorias-limpeza-higiene.md.
 --   Pet stays OUT of the cycle: it was not part of the decision.
 --
--- STATUS: PROPOSAL. NOT APPLIED to the canonical database (home_shopper-db) and
---   NOT merged. Depends on db/007_category_attributes_and_category_rules.sql,
+-- STATUS: APPLIED to the canonical database (home_shopper-db) and MERGED.
+--   Merged in <internal PR> (commit d7265db). Applied to the canonical database
+--   on 2026-10-06. Depends on db/007_category_attributes_and_category_rules.sql,
 --   which creates the two tables this file fills.
 --
 -- WHY THIS IS NOT IN db/ (and not named db/00N)
---   CI applies `db/*.sql` in order and then runs tests/smoke_test.sql. That test
---   inserts ONE category and reads it back with the scalar subquery
---   `(SELECT id FROM categories)`:
-
---       INSERT INTO categories (name) VALUES ('Meat and cold cuts');
---       INSERT INTO products (...) VALUES ('Chicken leg Swift',
---                                          (SELECT id FROM categories), ...);
-
---   With seeded rows that subquery returns more than one row and the test
---   errors -- a seed must not be able to break the domain test. A seed is DATA,
---   not schema, so it stays outside the db/ glob and is applied by hand after
---   the go:
+--   A seed is DATA, not schema. The db/ glob is for DDL (CREATE TABLE, ALTER TABLE)
+--   applied in order by the CI. Seeds are DML (INSERT INTO) and are applied
+--   separately. The CI applies seeds/*.sql after db/*.sql and before the smoke
+--   test. To apply manually:
 --
 --     docker exec -i home_shopper-db psql -U home_shopper -d home_shopper \
 --         -v ON_ERROR_STOP=1 -f - < seeds/2026-10-05-categories-and-attributes.sql

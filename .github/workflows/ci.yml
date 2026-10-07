@@ -52,6 +52,17 @@ jobs:
             echo "::endgroup::"
           done
 
+      - name: Apply seeds
+        env:
+          PGPASSWORD: ci
+        run: |
+          set -euo pipefail
+          for f in seeds/*.sql; do
+            echo "::group::$f"
+            psql -h localhost -U home_shopper -d home_shopper -v ON_ERROR_STOP=1 -f "$f"
+            echo "::endgroup::"
+          done
+
       - name: Domain tests
         env:
           PGPASSWORD: ci
