@@ -1,7 +1,7 @@
 # ERD — home_shopper
 
-Generated from the schema applied on PostgreSQL 16: **20 tables, 9 views,
-67 indexes, 23 triggers, 8 enums**. Measured on **2026-10-06** in a disposable
+Generated from the schema applied on PostgreSQL 16: **22 tables, 12 views,
+67 indexes, 24 triggers, 9 enums**. Measured on **2026-10-06** in a disposable
 database that applied `db/001_schema.sql` … `db/016_price_window_view.sql`
 in order (`information_schema.tables`, `information_schema.views`, `pg_indexes`,
 `information_schema.triggers`, `pg_type`/`pg_enum` in schema `public`), and
@@ -14,9 +14,7 @@ This diagram documents what is **implemented** (`db/001`–`db/016`). Migrations
 catalogue coverage after an erasure, the `users.email` constraints,
 `price_refs.samples_30d`, the two variation columns of decision D9, the
 presentation link on `staging_lines`, and the price window as a query (decision
-D10) — are integrated into that chain. The entity boxes below
-still cover the `db/001`–`db/006` base; the structures added since are specified
-in the migration files and in `<internal review>`.
+D10) — are integrated into that chain.
 
 **The price window is not in this diagram, on purpose.** `db/016` (decision D10) left
 `price_refs` holding only the observation, and the aggregation over a window became a
@@ -79,6 +77,7 @@ erDiagram
         integer   multipack_quantity "NULL or > 1"
         enum      sale_unit_recognized "controlled vocabulary"
         numeric   factor_base "base units per sale unit"
+        enum      review_state "PENDING, REVIEWED, NO_MATCH"
         timestamptz created_at
         timestamptz updated_at
     }
@@ -105,6 +104,25 @@ erDiagram
         uuid      purchase_note_id FK "origin, NULL when multi-valued"
         smallint  line_no FK "origin, NULL when multi-valued"
         timestamptz created_at
+    }
+
+    category_attributes {
+        uuid      id PK
+        uuid      category_id FK
+        text      attribute "snake_case key"
+        text      value_kind "TEXT or BOOLEAN"
+        timestamptz created_at
+    }
+
+    product_attributes {
+        uuid      id PK
+        uuid      product_id FK
+        uuid      category_id FK
+        text      attribute
+        text      value_text "XOR with value_boolean"
+        boolean   value_boolean "XOR with value_text"
+        timestamptz created_at
+        timestamptz updated_at
     }
 
     %% ---------- STAGING ----------
@@ -144,6 +162,7 @@ erDiagram
         enum      match_source "BARCODE, DESCRIPTION, ALIAS, MANUAL, NONE"
         text      match_note "learning loop trail"
         boolean   reviewed
+        enum      review_state "PENDING, CONFIRMED, NO_MATCH, SKIPPED"
         boolean   discarded
         timestamptz created_at
     }
@@ -170,7 +189,7 @@ erDiagram
         numeric   quantity
         numeric   discount_line
         numeric   line_total
-        numeric   base_price "per base_unit, by trigger"
+        numeric   base_price "per base unit, by trigger"
         enum      base_unit "derived by trigger"
         timestamptz created_at
     }
@@ -184,6 +203,8 @@ erDiagram
         date      ref_date
         numeric   base_price
         enum      base_unit
+        integer   samples_30d "count of observations in the 30-day window"
+        numeric   price_spread_pct "max - min / min, signed"
         numeric   price_change_pct "signed, vs the previous observation; NULL when not comparable"
         timestamptz updated_at
     }
@@ -197,6 +218,26 @@ erDiagram
         numeric   var_pct
         text      message
         boolean   read
+        timestamptz created_at
+    }
+
+    %% ---------- CATALOGUE WRITE / RETENTION ----------
+    catalog_write_requests {
+        uuid      id PK
+        uuid      user_id FK
+        text      request_type "PRODUCT, PRESENTION, SYNONYM"
+        text      payload "JSONB"
+        enum      status "PENDING, APPROVED, REJECTED"
+        timestamptz created_at
+        timestamptz decided_at
+    }
+
+    retention_policy {
+        uuid      id PK
+        text      table_name
+        text      column_name
+        integer   retention_days
+        text      legal_basis
         timestamptz created_at
     }
 
@@ -238,8 +279,10 @@ erDiagram
 
     categories ||--o{ categories : "contains"
     categories ||--o{ products : "classifies"
+    categories ||--o{ category_attributes : "declares"
 
     products ||--o{ presentations : "sold as"
+    products ||--o{ product_attributes : "has values"
     products ||--o{ line_items : "bought"
     products ||--o{ staging_lines : "matched in"
     products ||--o{ price_refs : "monitored"
@@ -252,12 +295,16 @@ erDiagram
 
     line_items ||--o{ presentation_identifiers : "line that declared it"
 
+    category_attributes ||--o{ product_attributes : "constrains"
+
     staging_receipts ||--o{ staging_lines : "raw lines"
     staging_receipts |o--o| purchase_notes : "becomes a reviewed note"
 
     purchase_notes ||--|{ line_items : "contains"
     purchase_notes }o--|| price_refs : "feeds"
     price_refs ||--o{ price_alerts : "triggers"
+
+    users ||--o{ catalog_write_requests : "requests"
 ```
 
 ## The three decisions the diagram makes visible
