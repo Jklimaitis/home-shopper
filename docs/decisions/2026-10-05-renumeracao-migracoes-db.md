@@ -1,7 +1,6 @@
 # Decisão — renumeração das migrações e ordem de integração (internal task)
 
-**Status:** **DECIDIDO — PENDENTE DE AUDITORIA** (integração provada em base descartável;
-nada aplicado no canônico)
+**Status:** **HISTÓRICO. Integração mergeada (<internal PR>).**
 **Decisão de:** engenharia (dono do domínio) · **autoriza o push/PR:** coordenação (coordenação)
 **Data:** 2026-10-05
 **Card:** `internal task` (`internal task`), board
