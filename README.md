@@ -185,13 +185,18 @@ natural key), so re-running the command above inserts nothing new.
 ### Apply the seeds
 
 The seeds in `seeds/` are **data** (DML), not schema (DDL). They are applied
-after `db/*.sql` and before the smoke test. The CI does this automatically;
-to apply manually:
+after `db/*.sql` and before the smoke test. The CI applies only the categories
+seed (data-independent); the classification seed requires 384 products and is
+applied manually to the canonical database.
 
 ```bash
-for f in seeds/*.sql; do
-  psql -h localhost -U home_shopper -d home_shopper -v ON_ERROR_STOP=1 -f "$f"
-done
+# CI applies this one automatically:
+psql -h localhost -U home_shopper -d home_shopper \
+     -v ON_ERROR_STOP=1 -f seeds/2026-10-05-categories-and-attributes.sql
+
+# Classification seed — manual, canonical only:
+docker exec -i home_shopper-db psql -U home_shopper -d home_shopper \
+    -v ON_ERROR_STOP=1 -f - < seeds/2026-10-06-product-category-classification.sql
 ```
 
 The seeds are idempotent — re-running them changes nothing. They include
@@ -201,6 +206,20 @@ self-checks that abort if the result doesn't match the expected state.
 |---|---|
 | `seeds/2026-10-05-categories-and-attributes.sql` | 8 categories + 14 attribute declarations |
 | `seeds/2026-10-06-product-category-classification.sql` | Classifies all 384 products into the 8 categories |
+
+### Purchase date precision
+
+`purchase_date` in `purchase_notes` has two levels of precision:
+
+| Source | Precision | Notes |
+|---|---|---|
+| Receipt header | Exact (day/month/year) | 4 of 15 notes |
+| Access key (AAMM) | Month/year only | 11 of 15 notes |
+
+`uploaded_at` (added in `db/017`) records when the user registered the note
+and is always exact. For MVP, month/year is sufficient for price trend
+analysis. The exact day is only critical for future "price dropped today"
+alerts.
 
 Tests:
 
