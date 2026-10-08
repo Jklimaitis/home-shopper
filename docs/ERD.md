@@ -224,20 +224,28 @@ erDiagram
     %% ---------- CATALOGUE WRITE / RETENTION ----------
     catalog_write_requests {
         uuid      id PK
-        uuid      user_id FK
-        text      request_type "PRODUCT, PRESENTION, SYNONYM"
-        text      payload "JSONB"
-        enum      status "PENDING, APPROVED, REJECTED"
+        uuid      requested_by FK "ON DELETE SET NULL"
+        text      requested_by_email
+        text      kind "PRODUCT, PRESENTATION, SYNONYM, ADJUSTMENT"
+        jsonb     payload
+        uuid      target_id "polymorphic, no FK"
+        text      justification
+        enum      status "OPEN, APPROVED, REJECTED"
+        uuid      reviewed_by "no FK: actor metadata"
+        text      reviewed_by_email
+        text      review_note
         timestamptz created_at
         timestamptz decided_at
     }
-
     retention_policy {
         uuid      id PK
         text      table_name
         text      column_name
-        integer   retention_days
-        text      legal_basis
+        text      purpose
+        text      legal_basis "CONSENT, CONTRACT, LEGITIMATE_INTEREST, LEGAL_OBLIGATION"
+        integer   retention_days "NULL = no fixed term"
+        timestamptz expires_at "required when retention_days IS NULL"
+        timestamptz last_purged_at
         timestamptz created_at
     }
 
@@ -245,7 +253,7 @@ erDiagram
     data_erasure_requests {
         uuid      id PK
         uuid      user_id "no FK: must outlive the DELETE"
-        text      email
+        text      email "nullable: NULL after retention window"
         integer   notes_removed
         integer   items_removed
         timestamptz requested_at
@@ -304,8 +312,53 @@ erDiagram
     purchase_notes }o--|| price_refs : "feeds"
     price_refs ||--o{ price_alerts : "triggers"
 
-    users ||--o{ catalog_write_requests : "requests"
+    users ||--o{ catalog_write_requests : "requests (requested_by)"
 ```
+
+## Views
+
+The schema defines **8 views** (plus `v_price_window` from `db/016`). They are
+derived artifacts — no view stores data that is not already in a table.
+
+| View | Purpose | Defined in |
+|---|---|---|
+| `v_price_aggregation` | Aggregated price per product/store | `db/002` |
+| `v_current_prices` | Latest price per product/store | `db/004`, replaced `db/016` |
+| `v_best_price` | Best (lowest) price per product | `db/004`, replaced `db/016` |
+| `v_monthly_spend` | Monthly spend per user | `db/004` |
+| `v_review_queue` | Staging lines pending review | `db/008` |
+| `v_catalog_write_queue` | Approval queue grouped by status/kind | `db/009` |
+| `v_retention_due` | Purge queue derived from `retention_policy` | `db/010` |
+| `v_catalog_coverage` | Catalogue coverage after LGPD erasure | `db/011` |
+| `v_price_window` | Price window per observation × screen preset | `db/016` |
+
+### `v_catalog_write_queue` (`db/009`)
+
+Approval queue for the shared catalogue. Groups `catalog_write_requests` by
+`status` and `kind`, returning `request_count`, `oldest_request_at` and
+`last_decision_at`. This is what a steward opens to see "how many PRODUCT
+requests are waiting".
+
+### `v_retention_due` (`db/010`)
+
+Purge queue derived from `retention_policy`. The grain is (policy, record,
+column): one audit row whose BOTH payload columns are past the window appears
+twice, once per column. Every approved target is a JOIN against
+`retention_policy`, so the queue is derived from the register and not from
+windows hardcoded in the view. Policies with a NULL `retention_days` never
+appear (no fixed term to expire), which is what keeps the trusted layer out of
+the automatic purge. `target_value` is filled ONLY for the filesystem target
+(the coupon path); the e-mail is deliberately NOT echoed — a compliance report
+must not become a second copy of the personal data it reports about.
+
+### `v_catalog_coverage` (`db/011`)
+
+Catalogue coverage after an LGPD erasure. `products` has no `user_id` (ADR-0004)
+and no FK points at `users`, so the product survives a user erasure — now with
+no price and no history. `has_history = false` IS the orphan marker. The view
+is deliberately NOT scoped by `user_id`: its whole purpose is to answer the
+catalogue-level question "does ANY price history survive for this product?".
+It exposes coverage aggregates only — no price, no user identity, no access key.
 
 ## The three decisions the diagram makes visible
 
