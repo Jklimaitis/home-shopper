@@ -1,15 +1,43 @@
-from fastapi import FastAPI, HTTPException, Query, Depends
+from fastapi import FastAPI, HTTPException, Query, Depends, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import http_exception_handler, request_validation_exception_handler
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, SecretStr
 from database import get_connection
 from datetime import date, datetime
 from typing import Literal, Any, cast
-from auth import verify_password, create_access_token, create_refresh_token, get_current_user_id
+from auth import (
+    verify_password, create_access_token, create_refresh_token,
+    get_current_user_id, require_catalog_admin,
+)
 import psycopg2
 import psycopg2.errors
 import uuid
 
 app = FastAPI()
+
+
+def _is_login_request(request: Request) -> bool:
+    # Route identity also works when the application is mounted under a prefix.
+    return getattr(request.scope.get("route"), "path", None) == "/login"
+
+
+@app.exception_handler(RequestValidationError)
+async def login_validation_error_handler(request: Request, exc: RequestValidationError):
+    if _is_login_request(request):
+        return JSONResponse(status_code=422, content={"detail": "Dados de login invalidos"})
+    return await request_validation_exception_handler(request, exc)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def login_http_error_handler(request: Request, exc: StarletteHTTPException):
+    if _is_login_request(request) and exc.status_code in (400, 422):
+        return JSONResponse(
+            status_code=exc.status_code, content={"detail": "Dados de login invalidos"},
+            headers=exc.headers,
+        )
+    return await http_exception_handler(request, exc)
 
 # Tabela de conversão
 UNIT_CONVERSION = {
@@ -98,7 +126,7 @@ def get_product(product_id: str):
     
     return product
 
-@app.post("/products", response_model=Product, status_code=201)
+@app.post("/products", response_model=Product, status_code=201, dependencies=[Depends(require_catalog_admin)])
 def create_product(product: ProductCreate):
     #Validar unidade de conversão
     unit = product.sale_unit.upper()
@@ -129,7 +157,7 @@ def create_product(product: ProductCreate):
         conn.close()
     return new_product
 
-@app.put("/products/{product_id}", response_model=Product)
+@app.put("/products/{product_id}", response_model=Product, dependencies=[Depends(require_catalog_admin)])
 def update_product(product_id: str, product: ProductCreate):
     # Converter a Unidade (Sim, mesmo esquema do POST para o usuario não precisar escrever tudo em G ou ML)
     unit = product.sale_unit.upper()
@@ -171,7 +199,7 @@ def update_product(product_id: str, product: ProductCreate):
         cur.close()
         conn.close()
 
-@app.delete("/products/{product_id}", status_code=204)
+@app.delete("/products/{product_id}", status_code=204, dependencies=[Depends(require_catalog_admin)])
 def delete_product(product_id: str):
     conn = get_connection()
     cur = conn.cursor()
@@ -253,17 +281,19 @@ PRICE_REF_COLUMNS = """
 
 class User(BaseModel):
     id: str
-    email: str
 
 @app.get("/users", response_model=list[User])
-def list_users():
+def list_users(user_id: str = Depends(get_current_user_id)):
     conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT id, email FROM users ORDER BY email")
-    users = cur.fetchall()
-    cur.close()
-    conn.close()
-    return users
+    try:
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT id FROM users WHERE id = %s", (user_id,))
+            return cur.fetchall()
+        finally:
+            cur.close()
+    finally:
+        conn.close()
 
 class PriceRefPage(BaseModel): #Classe para termos o scroll "infinito"
     data: list[PriceRef]
@@ -342,7 +372,7 @@ def get_price_refs_by_product(product_id: str, user_id: str = Depends(get_curren
 
 class LoginRequest(BaseModel):
     email: str
-    password: str
+    password: SecretStr = Field(min_length=1)
 
 @app.post("/login")
 def login(data: LoginRequest):
@@ -350,7 +380,7 @@ def login(data: LoginRequest):
     conn = get_connection()
     cur = conn.cursor()
     try:
-        cur.execute("SELECT id, email FROM users WHERE email = %s", (data.email)) # Selecionando EMAIL
+        cur.execute("SELECT id, email FROM users WHERE email = %s", (data.email,)) # Selecionando EMAIL
         user= cast(dict[str, Any] | None, cur.fetchone())
 
         # 3. Buscar credencial do usuario
@@ -370,7 +400,7 @@ def login(data: LoginRequest):
         raise HTTPException(status_code=401, detail="Email ou senha incorretos")
 
     # 4. Verificar senha com verify_password
-    if not verify_password(data.password, credential["password_hash"]):
+    if not verify_password(data.password.get_secret_value(), credential["password_hash"]):
         raise HTTPException(status_code=401, detail="Email ou senha incorretos")
 
     # 5. Gerar access_token e refresh_token
@@ -382,4 +412,3 @@ def login(data: LoginRequest):
         "refresh_token": refresh_token,
         "token_type": "bearer",
     }
-
