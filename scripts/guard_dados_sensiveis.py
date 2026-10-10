@@ -2,9 +2,11 @@
 """
 Guard de dados sensiveis.
 
-Falha (exit 1) se qualquer arquivo versionado contiver dado que identifica
-pessoa fisica. Roda no pre-commit e na CI: o erro nao pode depender de
-alguem lembrar de rodar.
+Bloqueia (exit 1) os padroes de CPF e chave fiscal no indice Git.
+O modo padrao verifica todos os arquivos indexados; --staged limita aos
+adicionados/modificados. Nao le copias unstaged e nao instala hooks.
+Erros de leitura, conflitos ou indice alterado retornam 2, nunca aprovacao.
+Este controle textual nao substitui scanner de segredos nem auditoria de toda PII.
 
 O que e considerado sensivel:
   - chave de acesso de NFC-e (44 digitos) nao composta so de zeros
@@ -51,16 +53,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Extensoes que nunca contem dado de negocio
+# Formatos binarios fora desta verificacao textual (nao e um scanner OCR).
 IGNORAR_SUFIXOS = {
     ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".pdf", ".zip",
     ".gz", ".tar", ".woff", ".woff2", ".ttf", ".eot", ".mp4", ".mp3",
-}
-
-# Extensoes varridas
-VARRER = {
-    ".py", ".sql", ".json", ".yaml", ".yml", ".md", ".txt", ".env",
-    ".example", ".sh", ".toml", ".ini", ".cfg", ".html", ".js", ".ts",
 }
 
 # Padroes. Cada um: (nome, regex, funcao de predicao do falso positivo)
@@ -100,9 +96,6 @@ PADROES: list[tuple[str, re.Pattern[str], object]] = [
     ),
 ]
 
-# Chaves de ambiente nao entram no guard: e o lugar LEGITIMO de um segredo.
-ARQUIVOS_PERMITIDOS_SENHA = {".env.example", ".gitignore"}
-
 
 class Achado:
     __slots__ = ("arquivo", "linha", "regra", "trecho")
@@ -114,9 +107,9 @@ class Achado:
         self.trecho = trecho
 
     def __str__(self) -> str:
-        # Mascarado: o guard existe para nao REPETIR o dado no log.
-        mascarado = self.trecho[:4] + "*" * max(0, len(self.trecho) - 8) + self.trecho[-4:]
-        return f"  {self.arquivo}:{self.linha}  {self.regra}  -> {mascarado}"
+        # Report location and rule, never identifier values or fragments.
+        arquivo = repr(self.arquivo) if any(char in self.arquivo for char in "\n\r\t") else self.arquivo
+        return f"  {arquivo}:{self.linha}  {self.regra}  (valor omitido)"
 
 
 def varrer_texto(nome: str, texto: str) -> list[Achado]:
@@ -129,53 +122,75 @@ def varrer_texto(nome: str, texto: str) -> list[Achado]:
     return achados
 
 
-def arquivos_staged(repo: Path) -> list[Path]:
-    out = subprocess.run(
-        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR"],
-        cwd=repo, capture_output=True, text=True, check=True,
-    )
-    return [repo / linha for linha in out.stdout.splitlines() if linha.strip()]
+def _git(repo: Path, *args: str) -> bytes:
+    return subprocess.run(
+        ["git", *args], cwd=repo, capture_output=True, check=True,
+    ).stdout
 
 
-def arquivos_do_repo(repo: Path) -> list[Path]:
-    alvos = []
-    for p in repo.rglob("*"):
-        if not p.is_file():
+def indice_git(repo: Path) -> tuple[bytes, dict[str, str], set[str]]:
+    snapshot = _git(repo, "ls-files", "--stage", "-z")
+    arquivos: dict[str, str] = {}
+    gitlinks: set[str] = set()
+    for entry in snapshot.split(b"\0"):
+        if not entry:
             continue
-        partes = set(p.parts)
-        if partes & {".git", "node_modules", ".venv", "__pycache__"}:
+        metadata, name = entry.split(b"\t", 1)
+        mode, oid, stage = metadata.decode("ascii").split()
+        if stage != "0":
+            raise ValueError("Indice com conflitos nao resolvidos")
+        decoded_name = name.decode("utf-8", errors="surrogateescape")
+        if mode == "160000":  # Submodule content belongs to its own repository.
+            gitlinks.add(decoded_name)
             continue
-        if p.name in ARQUIVOS_PERMITIDOS_SENHA:
-            continue
-        if p.suffix.lower() in IGNORAR_SUFIXOS:
-            continue
-        if p.suffix.lower() in VARRER or p.name in {".env", ".gitignore"}:
-            alvos.append(p)
-    return alvos
+        arquivos[decoded_name] = oid
+    return snapshot, arquivos, gitlinks
 
 
-def main() -> int:
+def arquivos_staged(repo: Path) -> list[str]:
+    out = _git(repo, "diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z")
+    return [name.decode("utf-8", errors="surrogateescape")
+            for name in out.split(b"\0") if name]
+
+
+def arquivos_do_repo(repo: Path) -> list[str]:
+    return list(indice_git(repo)[1])
+
+
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Bloqueia dado pessoal no repositorio")
     ap.add_argument("--staged", action="store_true", help="verifica so o staged")
     ap.add_argument("--repo", default=".", help="raiz do repositorio")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
-    repo = Path(args.repo).resolve()
-    if not (repo / ".git").exists() and not (repo / ".git").is_file():
-        print(f"guard: '{repo}' nao e um repositorio git", file=sys.stderr)
+    achados: list[Achado] = []
+    verificados = 0
+    try:
+        initial = Path(args.repo).resolve()
+        repo = Path(_git(initial, "rev-parse", "--show-toplevel").decode("utf-8").strip())
+        snapshot, indice, gitlinks = indice_git(repo)
+        arquivos = arquivos_staged(repo) if args.staged else list(indice)
+        for name in arquivos:
+            if name in gitlinks:
+                continue
+            # Read the immutable indexed blob, not the mutable working copy.
+            blob = _git(repo, "cat-file", "blob", indice[name])
+            try:
+                texto = blob.decode("utf-8", errors="strict")
+            except UnicodeDecodeError:
+                if Path(name).suffix.lower() in IGNORAR_SUFIXOS:
+                    continue  # Recognized binary format; no OCR/content extraction here.
+                raise
+            verificados += 1
+            achados.extend(varrer_texto(name, texto))
+        if _git(repo, "ls-files", "--stage", "-z") != snapshot:
+            raise ValueError("Indice mudou durante a verificacao")
+    except (OSError, subprocess.CalledProcessError, UnicodeError, ValueError, KeyError):
+        print("guard: ERRO -- nao foi possivel verificar integralmente o indice Git", file=sys.stderr)
         return 2
 
-    arquivos = arquivos_staged(repo) if args.staged else arquivos_do_repo(repo)
-    achados: list[Achado] = []
-    for p in arquivos:
-        try:
-            texto = p.read_text(encoding="utf-8", errors="strict")
-        except (UnicodeDecodeError, OSError):
-            continue
-        achados.extend(varrer_texto(str(p.relative_to(repo)), texto))
-
     if not achados:
-        print(f"guard: OK -- {len(arquivos)} arquivo(s) verificado(s), nenhum dado pessoal")
+        print(f"guard: OK -- {verificados} arquivo(s) do indice verificado(s), nenhum padrao bloqueado")
         return 0
 
     print("guard: FALHOU -- dado pessoal encontrado no que seria versionado\n")
