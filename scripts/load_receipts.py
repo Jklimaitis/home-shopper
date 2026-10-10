@@ -156,7 +156,7 @@ DEFAULT_SOURCE_DIR = (
     "<evidence>/<private>"
 )
 DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000001"
-DEFAULT_USER_NAME = "Jonas Klimaitis"
+DEFAULT_USER_NAME = "default_user"
 DEFAULT_USER_EMAIL = "user@example.com"
 
 # CNPJ (14 digits) -> display name. Taken from the recovered loader so the

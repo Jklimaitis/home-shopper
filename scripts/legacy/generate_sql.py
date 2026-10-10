@@ -64,7 +64,7 @@ def main():
     lines.append("-- User")
     lines.append("""
 INSERT INTO users (id, name, email)
-VALUES ('00000000-0000-0000-0000-000000000001', 'Jonas Klimaitis', 'user@example.com')
+VALUES ('00000000-0000-0000-0000-000000000001', 'default_user', 'user@example.com')
 ON CONFLICT (email) DO NOTHING;
 """)
 

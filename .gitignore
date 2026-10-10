@@ -5,9 +5,9 @@
 # consumidor. Quem tiver a chave consegue puxar a nota na SEFAZ, inclusive
 # CPF e historico de compras. Dado de terceiro, protected pela LGPD.
 #
-# O repositorio e PRIVADO e contem apenas fixtures anonimizados.
-# Para virar open source depois, nenhum trabalho extra e necessario:
-# ja esta limpo.
+# O repositorio e PRIVADO. Fixtures devem usar apenas dados sinteticos.
+# Estas regras nao removem dados ja versionados nem substituem a auditoria
+# de privacidade antes de qualquer publicacao.
 # =============================================================================
 
 # Segredos e ambiente
@@ -47,6 +47,23 @@ media/
 pgdata/
 dump*.sql
 backup*.sql
+
+# Backups e exportações locais
+backups/
+dumps/
+receipt-imports/
+*.dump
+*.backup
+*.sql.gz
+*.sql.bz2
+*.sql.xz
+
+# Build e cobertura
+build/
+dist/
+htmlcov/
+.coverage
+.coverage.*
 
 # Python
 __pycache__/
