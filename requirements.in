@@ -1,0 +1,11 @@
+# Direct runtime dependencies of api/; Linux CPython 3.14 validation target.
+# Regenerate requirements.txt in an isolated resolver, then run the API tests.
+# bcrypt is used directly: do not add Passlib or silently truncate passwords.
+bcrypt==5.0.0
+fastapi==0.142.2
+psycopg2-binary==2.9.13
+pydantic==2.13.5
+python-dotenv==1.2.4
+python-jose[cryptography]==3.5.0
+starlette==1.7.0
+uvicorn==0.54.0
