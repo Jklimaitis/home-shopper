@@ -97,6 +97,11 @@ PADROES: list[tuple[str, re.Pattern[str], object]] = [
 ]
 
 
+# Only a complete packaging SHA-256 token classifies its 64 hex digits as
+# checksum data. Never exempt a whole line/file or arbitrary hexadecimal text.
+HASH_SHA256 = re.compile(r"(?<!\S)--hash=sha256:([a-fA-F0-9]{64})(?=\s|$)")
+
+
 class Achado:
     __slots__ = ("arquivo", "linha", "regra", "trecho")
 
@@ -115,8 +120,13 @@ class Achado:
 def varrer_texto(nome: str, texto: str) -> list[Achado]:
     achados: list[Achado] = []
     for num, linha in enumerate(texto.splitlines(), start=1):
+        checksums = [match.span(1) for match in HASH_SHA256.finditer(linha)]
         for regra, regex, e_falso_positivo in PADROES:
             for m in regex.finditer(linha):
+                if regra == "CPF (11 digitos)" and any(
+                    start <= m.start() and m.end() <= end for start, end in checksums
+                ):
+                    continue
                 if e_falso_positivo(m):
                     achados.append(Achado(nome, num, regra, m.group()))
     return achados

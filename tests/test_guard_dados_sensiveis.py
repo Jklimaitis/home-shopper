@@ -70,6 +70,83 @@ class GuardIndexTests(unittest.TestCase):
         self.assertEqual(self.guard(staged=False).returncode, 1)
 
 
+    def test_packaging_sha256_digests_do_not_trigger_cpf_rule(self):
+        cpf = "1" * 10 + "2"
+        digest = "a" * 26 + cpf + "b" * 27
+        for value in (digest, digest.upper()):
+            with self.subTest(hex_case=value[0]):
+                self.stage("requirements.txt", "example==1.0 \\\n    --hash=sha256:" + value + "\n")
+                result = self.guard()
+                self.assertEqual(result.returncode, 0, result.stdout)
+
+    def test_cpf_adjacent_to_checksum_is_blocked_in_source_and_comments(self):
+        cpf = "1" * 10 + "2"
+        formatted = cpf[:3] + "." + cpf[3:6] + "." + cpf[6:9] + "-" + cpf[9:]
+        token = "--hash=sha256:" + "a" * 26 + cpf + "b" * 27
+        module = self.load_guard_module()
+        for name, content in (
+            ("control.py", 'cpf = "{cpf}"  # {hash}'),
+            ("control.json", '{{"cpf": "{cpf}"}} {hash}'),
+            ("control.sql", "SELECT '{cpf}'; -- {hash}"),
+            ("requirements.txt", "{hash} # cpf: {cpf}"),
+        ):
+            for value in (cpf, formatted):
+                with self.subTest(file=name, formatted="." in value):
+                    text = content.format(cpf=value, hash=token)
+                    findings = module.varrer_texto(name, text)
+                    self.assertEqual(len(findings), 1)
+                    self.assertTrue(findings[0].regra.startswith("CPF"))
+
+    def test_staged_checksum_line_keeps_cpf_before_and_after_token_blocked(self):
+        cpf = "1" * 10 + "2"
+        token = "--hash=sha256:" + "a" * 26 + cpf + "b" * 27
+        self.stage("requirements.txt", cpf + " " + token + " # " + cpf + "\n")
+        result = self.guard()
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout.count("requirements.txt:1"), 2)
+        self.assertNotIn(cpf, result.stdout)
+
+    def test_multiple_valid_checksum_tokens_on_one_line_are_allowed(self):
+        cpf = "1" * 10 + "2"
+        digest = "a" * 26 + cpf + "b" * 27
+        self.stage("requirements.txt", "--hash=sha256:" + digest +
+                   " --hash=sha256:" + digest.upper() + "\n")
+        self.assertEqual(self.guard().returncode, 0)
+        self.assertEqual(self.guard(staged=False).returncode, 0)
+
+    def test_malformed_checksum_tokens_do_not_hide_cpf(self):
+        cpf = "1" * 10 + "2"
+        digest = "a" * 26 + cpf + "b" * 27
+        module = self.load_guard_module()
+        cases = (
+            "--hash=sha256:" + digest[:-1],
+            "--hash=sha256:" + digest + "f",
+            "--hash=sha256:" + digest[:-1] + "g",
+            "--hash=sha1:" + digest,
+            "x--hash=sha256:" + digest,
+            "--hash=sha256:" + digest + ":suffix",
+        )
+        for text in cases:
+            with self.subTest(case_length=len(text)):
+                findings = module.varrer_texto("requirements.txt", text)
+                self.assertEqual(len(findings), 1)
+                self.assertEqual(findings[0].regra, "CPF (11 digitos)")
+
+    def test_arbitrary_hexadecimal_strings_are_not_exempt(self):
+        cpf = "1" * 10 + "2"
+        self.stage("control.json", json.dumps({"control": "a" * 26 + cpf + "b" * 27}))
+        self.assertEqual(self.guard().returncode, 1)
+
+    def test_fiscal_key_rule_remains_active_even_inside_checksum_token(self):
+        padding = (64 - len(CONTROL_KEY)) // 2
+        digest = "a" * padding + CONTROL_KEY + "b" * padding
+        self.assertEqual(len(digest), 64)
+        self.stage("requirements.txt", "--hash=sha256:" + digest + "\n")
+        result = self.guard()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("chave de acesso NFC-e", result.stdout)
+        self.assertNotIn(CONTROL_KEY, result.stdout)
+
     def test_four_sensitive_formats_are_blocked(self):
         cpf = "1" * 10 + "2"
         formatted_cpf = cpf[:3] + "." + cpf[3:6] + "." + cpf[6:9] + "-" + cpf[9:]
