@@ -366,11 +366,33 @@ class ReviewInstructionTextTests(unittest.TestCase):
         text=buf.getvalue()
         self.assertIn("review_state = 'CONFIRMED'",text)
         self.assertIn("review_state = 'NO_MATCH'",text)
-        self.assertNotIn('-- UPDATE',text)
+        # O que não pode existir é o exemplo COMENTADO (instrução que não roda).
+        # A asserção é pelo comando, não pela palavra: o texto traz comentários
+        # legítimos que começam com "UPDATE" (explicam a saída esperada).
+        self.assertNotIn('-- UPDATE staging_lines',text)
 
     def test_no_match_sql_escapes_single_quotes_in_the_reason(self):
         sql=ingest.no_match_line_sql('11111111-1111-1111-1111-111111111111',"motivo com 'aspas'")
         self.assertIn("''aspas''",sql)
+
+    def test_statements_return_the_state_that_actually_landed(self):
+        # O operador precisa ver o estado que ficou, não só "1 linha atualizada":
+        # um trigger pode ter mudado o desfecho depois do UPDATE.
+        conf=ingest.confirm_line_sql('11111111-1111-1111-1111-111111111111',
+                                     '22222222-2222-2222-2222-222222222222',
+                                     '33333333-3333-3333-3333-333333333333')
+        rec=ingest.no_match_line_sql('11111111-1111-1111-1111-111111111111','motivo')
+        self.assertIn('RETURNING id, review_state, reviewed',conf)
+        self.assertIn('RETURNING id, review_state, reviewed',rec)
+        # Recusar linha confirmada não é transição suportada: tem de ser não-ação.
+        self.assertIn("review_state <> 'CONFIRMED'",rec)
+
+    def test_printed_text_explains_what_to_do_when_nothing_changed(self):
+        buf=io.StringIO()
+        with patch('sys.stdout',buf):
+            ingest.print_review_instructions(uuid.uuid4())
+        texto=buf.getvalue()
+        self.assertIn('UPDATE 0',texto)
 
 
 class ReviewInstructionIntegrationTests(unittest.TestCase):
@@ -477,6 +499,25 @@ class ReviewInstructionIntegrationTests(unittest.TestCase):
         self.assertIsNone(row[2])
         self.assertIsNone(row[3])
         self.assertEqual(json.loads(row[4])['reason'],'human_no_match')
+
+    def test_refusing_an_already_confirmed_line_changes_nothing(self):
+        # Recusar linha confirmada não é transição suportada pelo schema: o trigger
+        # demote_unlinked_confirmed_line (db/008 §6) rebaixaria para PENDING pelas
+        # costas. O comando tem de ser uma não-ação visível, não um falso sucesso.
+        line_id=self.pending_line()
+        with self.conn:
+            with self.conn.cursor() as cur:
+                cur.execute(ingest.confirm_line_sql(line_id,self.product,self.presentation))
+        with self.conn.cursor() as cur:
+            cur.execute('SELECT review_state,reviewed FROM staging_lines WHERE id=%s',(line_id,))
+            antes=cur.fetchone()
+        self.assertEqual(antes,('CONFIRMED',True))
+        with self.conn:
+            with self.conn.cursor() as cur:
+                cur.execute(ingest.no_match_line_sql(line_id,'operador mudou de ideia'))
+                cur.execute('SELECT review_state,reviewed FROM staging_lines WHERE id=%s',(line_id,))
+                depois=cur.fetchone()
+        self.assertEqual(depois,('CONFIRMED',True))
 
 
 class ConcurrentStoreCreationTests(unittest.TestCase):

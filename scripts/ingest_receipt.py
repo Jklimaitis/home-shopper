@@ -303,6 +303,9 @@ def confirm_line_sql(line_id: str, product_id: str, presentation_id: str) -> str
     ('CONFIRMED','NO_MATCH'))`, e `ck_staging_lines_confirmed` exige os dois
     vínculos. Marcar `reviewed = TRUE` sem mudar `review_state` é rejeitado pelo
     banco — o exemplo tem de aplicar a decisão inteira.
+
+    `RETURNING` devolve o **estado que ficou**, não só "1 linha atualizada": um
+    `BEFORE UPDATE` pode mudar o desfecho, e o operador precisa ver isso.
     """
     return (
         "UPDATE staging_lines\n"
@@ -311,7 +314,8 @@ def confirm_line_sql(line_id: str, product_id: str, presentation_id: str) -> str
         "    match_source = 'MANUAL',\n"
         "    review_state = 'CONFIRMED',\n"
         "    reviewed = TRUE\n"
-        f"WHERE id = {_sql_literal(line_id)};"
+        f"WHERE id = {_sql_literal(line_id)}\n"
+        "RETURNING id, review_state, reviewed;"
     )
 
 
@@ -324,6 +328,12 @@ def no_match_line_sql(line_id: str, reason: str) -> str:
     recusá-las deixando o vínculo antigo faria do estado `NO_MATCH` uma mentira —
     é o mesmo raciocínio que o próprio `db/008` registra. O motivo vai como JSON,
     na mesma forma que o matcher grava, para a fila não precisar de dois formatos.
+
+    A guarda `review_state <> 'CONFIRMED'` existe porque recusar uma linha já
+    confirmada **não é transição suportada**: o trigger
+    `demote_unlinked_confirmed_line` (db/008 §6) devolveria a linha para `PENDING`
+    ao perder o vínculo, e o operador veria um falso sucesso. Com a guarda, a
+    tentativa é uma não-ação visível (`UPDATE 0`).
     """
     note = json.dumps({"reason": "human_no_match", "note": str(reason)})
     return (
@@ -333,7 +343,9 @@ def no_match_line_sql(line_id: str, reason: str) -> str:
         "    product_id = NULL,\n"
         "    presentation_id = NULL,\n"
         f"    match_note = {_sql_literal(note)}\n"
-        f"WHERE id = {_sql_literal(line_id)};"
+        f"WHERE id = {_sql_literal(line_id)}\n"
+        "  AND review_state <> 'CONFIRMED'\n"
+        "RETURNING id, review_state, reviewed;"
     )
 
 
@@ -362,9 +374,15 @@ WHERE receipt_id = '{receipt_id}' AND match_source = 'NONE';
 
 -- 3. Confirmar o vínculo de uma linha (preencha os campos entre <> e rode):
 {confirm_line_sql(PLACEHOLDER_LINE, PLACEHOLDER_PRODUCT, PLACEHOLDER_PRESENTATION)}
+-- Saída esperada: a linha devolvida com review_state = CONFIRMED.
+-- UPDATE 0 significa que o id não confere e nada foi alterado.
 
 -- 4. Recusar todos os candidatos, com motivo (a linha precisa ficar sem vínculo):
 {no_match_line_sql(PLACEHOLDER_LINE, PLACEHOLDER_REASON)}
+-- Saída esperada: a linha devolvida com review_state = NO_MATCH.
+-- UPDATE 0 em uma linha já CONFIRMED é esperado: desfaça antes a confirmação
+-- limpando o vínculo (product_id e presentation_id para NULL) — a linha volta
+-- para PENDING — e rode este comando de novo.
 """)
 
 
