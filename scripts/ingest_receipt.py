@@ -3,7 +3,7 @@ import json
 import os
 import sys
 import uuid
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -38,28 +38,53 @@ DEFAULT_USER_ID = os.getenv("DEFAULT_USER_ID", "00000000-0000-0000-0000-00000000
 
 # ─── Funções auxiliares ─────────────────────────────────────────
 
-def parse_decimal(value: Any, default: str = "0.00") -> Decimal: #Converte valores float, int ou str (inclusive com vírgula) para Decimal com segurança.
+def parse_decimal(value: Any) -> Optional[Decimal]:
+    """Preserva ausência e aceita somente números finitos não negativos."""
     if value is None:
-        return Decimal(default)
-    if isinstance(value, (int, float)):
-        return Decimal(str(value))
+        return None
+    if isinstance(value, bool) or not isinstance(value, (str, int, float, Decimal)):
+        raise ValueError("Valor numérico inválido.")
     clean_val = str(value).strip().replace(",", ".")
-    return Decimal(clean_val) if clean_val else Decimal(default)
+    if not clean_val:
+        return None
+    try:
+        number = Decimal(clean_val)
+    except InvalidOperation:
+        raise ValueError("Valor numérico inválido.") from None
+    if not number.is_finite() or number < 0:
+        raise ValueError("Valor numérico inválido.")
+    return number
+
+
+def required_decimal(value: Any) -> Decimal:
+    number = parse_decimal(value)
+    if number is None:
+        raise ValueError("Quantidade ou valor obrigatório ausente.")
+    return number
+
+
+def first_present(mapping: dict, *names: str, default: Any = None) -> Any:
+    """Escolhe pela presença do campo; zero não significa ausência."""
+    for name in names:
+        if name in mapping:
+            return mapping[name]
+    return default
 
 
 def parse_note(payload: dict) -> dict: # Normaliza o JSON da NFC-e para o formato interno aderente ao schema.
-    header = payload.get("header") or payload.get("nota") or payload
-    items_raw = payload.get("items") or payload.get("itens") or []
+    if not isinstance(payload, dict):
+        raise ValueError("Estrutura de entrada inválida.")
+    header = first_present(payload, "header", "nota", default=payload)
+    items_raw = first_present(payload, "items", "itens", default=[])
+    if not isinstance(header, dict) or not isinstance(items_raw, list):
+        raise ValueError("Estrutura de entrada inválida.")
+    if any(not isinstance(item, dict) for item in items_raw):
+        raise ValueError("Estrutura de linha inválida.")
 
-    # Extrai chave de acesso (44 dígitos para source_ref)
-    access_key = (
-        header.get("access_key")
-        or header.get("chave_acesso")
-        or header.get("chave")
-        or header.get("source_ref")
-    )
-    if access_key:
-        access_key = "".join(filter(str.isdigit, str(access_key)))
+    # Referência opaca do staging: preservação não valida uma chave fiscal.
+    source_ref = first_present(header, "source_ref", "access_key", "chave_acesso", "chave")
+    if source_ref is not None and not isinstance(source_ref, str):
+        raise ValueError("Referência de origem inválida.")
 
     store_cnpj = (
         header.get("store_cnpj")
@@ -79,46 +104,40 @@ def parse_note(payload: dict) -> dict: # Normaliza o JSON da NFC-e para o format
 
     # Valores financeiros
     total_gross = parse_decimal(
-        header.get("total_gross")
-        or header.get("valor_bruto")
-        or header.get("valor_total")
-        or header.get("total_amount")
-        or header.get("total")
+        first_present(header, "total_gross", "valor_bruto", "valor_total", "total_amount", "total")
     )
 
-    discount = parse_decimal(
-        header.get("discount")
-        or header.get("desconto")
-        or header.get("valor_desconto")
+    discount = required_decimal(
+        first_present(header, "discount_total", "discount", "desconto", "valor_desconto", default="0")
     )
 
     amount_paid_raw = (
-        header.get("amount_paid")
-        or header.get("valor_pago")
-        or header.get("total_liquido")
+        first_present(header, "amount_paid", "valor_pago", "total_liquido")
     )
-    if amount_paid_raw is not None:
-        amount_paid = parse_decimal(amount_paid_raw)
-    else:
-        amount_paid = total_gross - discount if discount else total_gross
+    amount_paid = parse_decimal(amount_paid_raw)
 
     items: List[Dict[str, Any]] = []
     for idx, it in enumerate(items_raw, start=1):
+        sale_unit = first_present(it, "sale_unit", "unit", "unidade")
+        if not isinstance(sale_unit, str) or not sale_unit.strip():
+            raise ValueError("Unidade de venda obrigatória ausente ou inválida.")
         items.append({
             "line_no": it.get("line_no") if it.get("line_no") is not None else (it.get("numero_item") or idx),
             "description_raw": it.get("description_raw") or it.get("description") or it.get("descricao") or it.get("nome") or "",
             "store_code": str(it.get("store_code") or it.get("code") or it.get("codigo") or "").strip() or None,
-            "sale_unit": (it.get("sale_unit") or it.get("unit") or it.get("unidade") or "UN").strip().upper(),
-            "quantity": parse_decimal(it.get("quantity") or it.get("quantidade"), default="1.000"),
-            "unit_price": parse_decimal(it.get("unit_price") or it.get("valor_unitario")),
-            "line_total": parse_decimal(it.get("line_total") or it.get("total_price") or it.get("valor_total"))
+            "sale_unit": sale_unit,
+            "quantity": required_decimal(first_present(it, "quantity", "quantidade")),
+            "unit_price": required_decimal(first_present(it, "unit_price", "valor_unitario")),
+            "discount_line": required_decimal(first_present(it, "discount_line", "desconto_linha", "discount", default="0")),
+            "line_total": required_decimal(first_present(it, "line_total", "total_price", "valor_total"))
         })
 
     return {
-        "source_ref": access_key,
+        "source_ref": source_ref,
         "store_cnpj": store_cnpj,
         "store_name": store_name,
         "total_gross": total_gross,
+        "discount_total": discount,
         "amount_paid": amount_paid,
         "items": items
     }
@@ -157,9 +176,9 @@ def insert_staging_receipt(
 
         cur.execute("""
             INSERT INTO staging_receipts (
-                user_id, source, source_ref, store_id, total_gross, amount_paid, file_path
+                user_id, source, source_ref, store_id, total_gross, discount_total, amount_paid, file_path
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s
             )
             ON CONFLICT (user_id, source, source_ref_norm)
                 WHERE source_ref_norm <> ''
@@ -171,6 +190,7 @@ def insert_staging_receipt(
             note.get("source_ref"),
             store_id,
             note["total_gross"],
+            note.get("discount_total", Decimal("0")),
             note["amount_paid"],
             file_path
         ))
@@ -196,12 +216,12 @@ def insert_staging_lines(conn, receipt_id: uuid.UUID, items: list[dict]) -> dict
             cur.execute("""
                 INSERT INTO staging_lines (
                     receipt_id, line_no, description_raw, store_code,
-                    sale_unit, quantity, unit_price, line_total,
+                    sale_unit, quantity, unit_price, discount_line, line_total,
                     product_id, presentation_id, match_source, match_note,
                     reviewed
                 ) VALUES (
                     %s, %s, %s, %s,
-                    %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, FALSE
                 );
             """, (
@@ -212,6 +232,7 @@ def insert_staging_lines(conn, receipt_id: uuid.UUID, items: list[dict]) -> dict
                 item["sale_unit"],
                 item["quantity"],
                 item["unit_price"],
+                item.get("discount_line", Decimal("0")),
                 item["line_total"],
                 match.product_id,
                 match.presentation_id,
@@ -277,7 +298,7 @@ def main():
 
     try:
         with open(args.file, "r", encoding="utf-8") as f:
-            raw_data = json.load(f)
+            raw_data = json.load(f, parse_float=Decimal)
         parsed_note = parse_note(raw_data)
     except json.JSONDecodeError:
         print("[!] Arquivo JSON inválido.")
@@ -302,7 +323,9 @@ def main():
         print(f"\n[✓] Ingestão realizada com sucesso!")
         print(f"    - Staging Receipt ID: {receipt_id}")
         print(f"    - Estabelecimento: {parsed_note.get('store_name')}")
-        print(f"    - Total Bruto: R$ {parsed_note['total_gross']:.2f} | Pago: R$ {parsed_note['amount_paid']:.2f}")
+        gross_label = "não informado" if parsed_note["total_gross"] is None else f"R$ {parsed_note['total_gross']:.2f}"
+        paid_label = "não informado" if parsed_note["amount_paid"] is None else f"R$ {parsed_note['amount_paid']:.2f}"
+        print(f"    - Total Bruto: {gross_label} | Pago: {paid_label}")
         print(f"    - Itens ingeridos: {len(parsed_note['items'])}")
         print(f"    - Match por Barcode: {stats.get('BARCODE', 0)}")
         print(f"    - Match por Descrição: {stats.get('DESCRIPTION', 0)}")
