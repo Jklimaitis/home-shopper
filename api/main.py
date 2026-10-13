@@ -11,9 +11,11 @@ from auth import (
     verify_password, create_access_token, create_refresh_token,
     get_current_user_id, require_catalog_admin,
 )
+import json
 import psycopg2
 import psycopg2.errors
 import uuid
+from decimal import Decimal
 
 app = FastAPI()
 
@@ -412,3 +414,153 @@ def login(data: LoginRequest):
         "refresh_token": refresh_token,
         "token_type": "bearer",
     }
+
+
+# ─── Staging: a fila de revisão do titular ───────────────────────────────────
+#
+# Duas rotas de leitura. Nenhuma escreve: decidir (confirmar, recusar, pular) e
+# consolidar são passos posteriores.
+#
+# O escopo é do titular e vai no SQL como parâmetro -- não é filtro aplicado
+# depois de ler. Sem isso, um id de recibo alheio devolveria a fila de outra
+# pessoa: é a lição do achado ING-01.
+
+
+class StagingReceiptSummary(BaseModel):
+    staging_receipt_id: str
+    source: str
+    status: str
+    store_name: str | None = None
+    issued_at: date | None = None
+    total_gross: Decimal | None = None
+    discount_total: Decimal | None = None
+    amount_paid: Decimal | None = None
+    total_computed: Decimal | None = None
+    divergence_cents: int | None = None
+    total_lines: int
+    lines_to_review: int
+    lines_skipped: int
+    unmatched_lines: int
+
+
+class StagingLine(BaseModel):
+    id: str
+    line_no: int
+    description_raw: str
+    store_code: str | None = None
+    sale_unit: str
+    quantity: Decimal
+    unit_price: Decimal
+    discount_line: Decimal
+    line_total: Decimal
+    product_id: str | None = None
+    presentation_id: str | None = None
+    match_source: str
+    review_state: str
+    reviewed: bool
+    match_note: str | None = None
+    # `match_note` é texto do banco: o matcher grava JSON com o motivo e, na
+    # ambiguidade, a lista de candidatos. Vai cru E interpretado, para a tela não
+    # reimplementar o parsing e para o texto legado continuar legível.
+    match_note_parsed: dict | None = None
+
+
+class StagingReviewProgress(BaseModel):
+    total: int
+    resolved: int
+    pending: int
+    skipped: int
+    consolidated: int | None = None  # chega junto com a consolidação (item 3)
+
+
+class StagingReceiptLines(BaseModel):
+    receipt_id: str
+    progress: StagingReviewProgress
+    lines: list[StagingLine]
+
+
+STAGING_QUEUE_SQL = """
+    SELECT vq.staging_receipt_id, vq.source, vq.status, vq.store_name, sr.issued_at,
+           vq.total_gross, vq.discount_total, vq.amount_paid, vq.total_computed,
+           vq.divergence_cents, vq.total_lines, vq.lines_to_review, vq.lines_skipped,
+           vq.unmatched_lines
+    FROM v_review_queue vq
+    JOIN staging_receipts sr ON sr.id = vq.staging_receipt_id
+    WHERE vq.user_id = %s
+    ORDER BY abs(coalesce(vq.divergence_cents, 0)) DESC, vq.unmatched_lines DESC,
+             sr.issued_at DESC NULLS LAST
+"""
+
+STAGING_LINES_SQL = """
+    SELECT sl.id, sl.line_no, sl.description_raw, sl.store_code, sl.sale_unit,
+           sl.quantity, sl.unit_price, sl.discount_line, sl.line_total,
+           sl.product_id, sl.presentation_id, sl.match_source, sl.review_state,
+           sl.reviewed, sl.match_note
+    FROM staging_lines sl
+    WHERE sl.receipt_id = %s
+    ORDER BY sl.line_no
+"""
+
+
+def _match_note_parsed(text: str | None) -> dict | None:
+    """O `match_note` como objeto quando ele é JSON; None quando é texto legado."""
+    if not text:
+        return None
+    try:
+        parsed = json.loads(text)
+    except (TypeError, ValueError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+@app.get("/staging/receipts", response_model=list[StagingReceiptSummary])
+def list_staging_receipts(user_id: str = Depends(get_current_user_id)):
+    """Recibos deste titular ainda na fila de revisão, com os contadores.
+
+    Reusa `v_review_queue` de propósito: o que é "estar na fila" é definição do
+    banco, em um lugar só, e não uma segunda interpretação escrita aqui.
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(STAGING_QUEUE_SQL, (user_id,))
+        return cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+
+
+@app.get("/staging/receipts/{receipt_id}/lines", response_model=StagingReceiptLines)
+def list_staging_lines(receipt_id: str, user_id: str = Depends(get_current_user_id)):
+    """Linhas de um recibo deste titular: estado de revisão e candidatos.
+
+    Confere primeiro se o recibo é deste titular e só então lê as linhas. Recibo
+    de outro titular devolve 404 -- e não 403, que confirmaria que ele existe.
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT 1 FROM staging_receipts WHERE id = %s AND user_id = %s",
+                    (receipt_id, user_id))
+        if cur.fetchone() is None:
+            raise HTTPException(status_code=404, detail="Recibo não encontrado")
+        cur.execute(STAGING_LINES_SQL, (receipt_id,))
+        rows = cur.fetchall()
+    except psycopg2.errors.InvalidTextRepresentation:
+        # Id que nem UUID é: o mesmo 404, sem vazar o motivo.
+        raise HTTPException(status_code=404, detail="Recibo não encontrado")
+    finally:
+        cur.close()
+        conn.close()
+
+    lines = [{**row, "match_note_parsed": _match_note_parsed(row.get("match_note"))} for row in rows]
+    # Dict, não instância do modelo: a função devolve dados uniformes e quem valida
+    # o contrato é o `response_model`, na borda HTTP.
+    progress = {
+        "total": len(lines),
+        "resolved": sum(1 for row in lines if row["review_state"] in ("CONFIRMED", "NO_MATCH")),
+        "pending": sum(1 for row in lines if row["review_state"] == "PENDING"),
+        "skipped": sum(1 for row in lines if row["review_state"] == "SKIPPED"),
+        "consolidated": None,
+    }
+    return {"receipt_id": receipt_id, "progress": progress, "lines": lines}
