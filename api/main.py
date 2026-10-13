@@ -471,12 +471,14 @@ class StagingLine(BaseModel):
 
 class StagingReviewProgress(BaseModel):
     total: int  # todas as linhas do recibo, igual ao `total_lines` da lista
-    in_review: int  # as que devem uma decisão: `total` menos as descartadas
-    resolved: int
+    resolved: int  # decisão tomada: CONFIRMED + NO_MATCH
     pending: int
     skipped: int
     discarded: int  # fora da revisão; não é estado de decisão (db/008)
     consolidated: int | None = None  # chega junto com a consolidação (item 3)
+    # Sem agregado próprio de "linhas a decidir": ele já existe na lista como
+    # `lines_to_review` (= `pending + skipped`) e um segundo nome com regra própria
+    # foi exatamente a divergência silenciosa que apareceu em duas revisões.
 
 
 class StagingReceiptLines(BaseModel):
@@ -543,10 +545,21 @@ def list_staging_lines(receipt_id: str, user_id: str = Depends(get_current_user_
     Confere primeiro se o recibo é deste titular e só então lê as linhas. Recibo
     de outro titular devolve 404 -- e não 403, que confirmaria que ele existe.
 
-    Os contadores têm de bater com os da fila, grandeza por grandeza: `total` é o
-    `total_lines` da lista, `in_review` é `lines_to_review`, `skipped` é
-    `lines_skipped`, e `discarded` é a diferença entre os dois primeiros. Regra
-    diferente entre a lista (view do banco) e o detalhe seria divergência silenciosa.
+    Cada contador do `progress` tem UM par na rota de lista, e só um:
+      `total`            = `total_lines`            (todas as linhas do recibo)
+      `pending + skipped` = `lines_to_review`        (o que ainda deve decisão)
+      `skipped`          = `lines_skipped`
+      `resolved`         = a diferença entre `total_lines` e `lines_to_review`,
+                           descontadas as descartadas
+      `discarded`        = fora da revisão (não é estado de decisão, db/008)
+    Não existe aqui um "total em revisão": seria um segundo nome para
+    `lines_to_review` com regra própria, e foi assim que a lista e o detalhe
+    divergiram em duas revisões seguidas.
+
+    O cabeçalho do recibo (loja, totais, divergência) NÃO vem por esta rota: a tela
+    o pega na lista. Duplicar aqui seria criar uma segunda fonte para o mesmo
+    número. Se a tela precisar dele junto das linhas, isso é decisão de contrato a
+    tomar com a tela na frente, não por conta própria.
     """
     conn = get_connection()
     cur = conn.cursor()
@@ -572,11 +585,10 @@ def list_staging_lines(receipt_id: str, user_id: str = Depends(get_current_user_
     # quem valida o contrato é o `response_model`, na borda HTTP.
     em_revisao = [row for row in lines if not row["discarded"]]
     progress = {
-        # `total` espelha o `total_lines` da fila (todas as linhas do recibo);
-        # `in_review` é o que sobra para decidir. A linha descartada continua na
-        # resposta, marcada, para a tela distinguir "fora da revisão" de "pendente".
+        # `total` espelha o `total_lines` da fila (todas as linhas do recibo). A
+        # linha descartada continua na resposta, marcada, para a tela distinguir
+        # "fora da revisão" de "pendente".
         "total": len(lines),
-        "in_review": len(em_revisao),
         "resolved": sum(1 for row in em_revisao if row["review_state"] in ("CONFIRMED", "NO_MATCH")),
         "pending": sum(1 for row in em_revisao if row["review_state"] == "PENDING"),
         "skipped": sum(1 for row in em_revisao if row["review_state"] == "SKIPPED"),
