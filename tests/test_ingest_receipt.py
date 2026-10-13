@@ -393,6 +393,11 @@ class ReviewInstructionTextTests(unittest.TestCase):
             ingest.print_review_instructions(uuid.uuid4())
         texto=buf.getvalue()
         self.assertIn('UPDATE 0',texto)
+        # A recusa pode dar UPDATE 0 por dois motivos diferentes; o texto tem de
+        # dizer quais, senão o operador não sabe se errou o id ou se a linha está
+        # confirmada.
+        self.assertIn('id não confere',texto)
+        self.assertIn('já está CONFIRMED',texto)
 
 
 class ReviewInstructionIntegrationTests(unittest.TestCase):
@@ -518,6 +523,28 @@ class ReviewInstructionIntegrationTests(unittest.TestCase):
                 cur.execute('SELECT review_state,reviewed FROM staging_lines WHERE id=%s',(line_id,))
                 depois=cur.fetchone()
         self.assertEqual(depois,('CONFIRMED',True))
+
+    def test_documented_recovery_path_unconfirms_then_refuses(self):
+        # O texto impresso manda: para recusar uma linha confirmada, limpe antes o
+        # vínculo (ela volta para PENDING) e então recuse. Este teste percorre
+        # exatamente esse caminho — instrução ao operador sem rede é instrução que
+        # quebra em silêncio.
+        line_id=self.pending_line()
+        with self.conn:
+            with self.conn.cursor() as cur:
+                cur.execute(ingest.confirm_line_sql(line_id,self.product,self.presentation))
+                cur.execute('UPDATE staging_lines SET product_id = NULL, presentation_id = NULL WHERE id = %s',(line_id,))
+                cur.execute('SELECT review_state,reviewed FROM staging_lines WHERE id=%s',(line_id,))
+                meio=cur.fetchone()
+        self.assertEqual(meio,('PENDING',False))
+        with self.conn:
+            with self.conn.cursor() as cur:
+                cur.execute(ingest.no_match_line_sql(line_id,'desfiz a confirmação e recusei'))
+                cur.execute('SELECT review_state,reviewed,product_id,presentation_id FROM staging_lines WHERE id=%s',(line_id,))
+                fim=cur.fetchone()
+        self.assertEqual((fim[0],fim[1]),('NO_MATCH',True))
+        self.assertIsNone(fim[2])
+        self.assertIsNone(fim[3])
 
 
 class ConcurrentStoreCreationTests(unittest.TestCase):

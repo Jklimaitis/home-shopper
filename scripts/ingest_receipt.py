@@ -380,9 +380,10 @@ WHERE receipt_id = '{receipt_id}' AND match_source = 'NONE';
 -- 4. Recusar todos os candidatos, com motivo (a linha precisa ficar sem vínculo):
 {no_match_line_sql(PLACEHOLDER_LINE, PLACEHOLDER_REASON)}
 -- Saída esperada: a linha devolvida com review_state = NO_MATCH.
--- UPDATE 0 em uma linha já CONFIRMED é esperado: desfaça antes a confirmação
--- limpando o vínculo (product_id e presentation_id para NULL) — a linha volta
--- para PENDING — e rode este comando de novo.
+-- UPDATE 0 tem duas causas: (a) o id não confere e nada foi alterado; (b) a linha
+-- já está CONFIRMED, estado que a recusa não decide. No caso (b), desfaça antes a
+-- confirmação limpando o vínculo (product_id e presentation_id para NULL): a linha
+-- volta para PENDING e este comando passa a valer.
 """)
 
 
