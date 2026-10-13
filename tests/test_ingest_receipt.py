@@ -416,7 +416,12 @@ class ReviewInstructionIntegrationTests(unittest.TestCase):
                 cur.execute('DELETE FROM stores WHERE id=%s',(self.store,))
                 cur.execute('DELETE FROM products WHERE id=%s',(self.product,))
 
-    def pending_line(self):
+    def pending_line(self,with_proposed_link=False):
+        if with_proposed_link:
+            with self.conn:
+                with self.conn.cursor() as cur:
+                    cur.execute('INSERT INTO presentation_sources(presentation_id,store_id,sale_unit,description_raw,description_search,reviewed) VALUES(%s,%s,%s,%s,%s,%s)',
+                                (self.presentation,self.store,'UN','REVIEW ITEM','review item',True))
         payload={'header':{'store_cnpj':'00000000000001','total_gross':'10','amount_paid':'10'},
                  'items':[{'description_raw':'REVIEW ITEM','sale_unit':'UN','quantity':'1',
                            'unit_price':'10','line_total':'10'}]}
@@ -443,6 +448,26 @@ class ReviewInstructionIntegrationTests(unittest.TestCase):
     def test_no_match_instruction_is_accepted_by_the_schema(self):
         line_id=self.pending_line()
         sql=ingest.no_match_line_sql(line_id,'operador decidiu que nenhum candidato serve')
+        with self.conn:
+            with self.conn.cursor() as cur:
+                cur.execute(sql)
+                cur.execute('SELECT review_state,reviewed,product_id,presentation_id,match_note FROM staging_lines WHERE id=%s',(line_id,))
+                row=cur.fetchone(); assert row is not None
+        self.assertEqual((row[0],row[1]),('NO_MATCH',True))
+        self.assertIsNone(row[2])
+        self.assertIsNone(row[3])
+        self.assertEqual(json.loads(row[4])['reason'],'human_no_match')
+
+    def test_no_match_instruction_also_works_on_a_line_that_has_a_link(self):
+        # Caso comum da fila: o matcher PROPÔS um vínculo (linha PENDING, com
+        # match_source DESCRIPTION) e o operador recusa. Sem limpar o vínculo, o
+        # CHECK ck_staging_lines_no_match reprova o comando.
+        line_id=self.pending_line(with_proposed_link=True)
+        with self.conn.cursor() as cur:
+            cur.execute('SELECT review_state,product_id IS NOT NULL FROM staging_lines WHERE id=%s',(line_id,))
+            antes=cur.fetchone()
+        self.assertEqual(antes,('PENDING',True))
+        sql=ingest.no_match_line_sql(line_id,'nenhum candidato serve')
         with self.conn:
             with self.conn.cursor() as cur:
                 cur.execute(sql)

@@ -318,15 +318,20 @@ def confirm_line_sql(line_id: str, product_id: str, presentation_id: str) -> str
 def no_match_line_sql(line_id: str, reason: str) -> str:
     """UPDATE que recusa todos os candidatos, com o motivo no `match_note`.
 
-    `ck_staging_lines_no_match` exige linha **sem** vínculo e motivo não vazio;
-    o motivo vai como JSON, na mesma forma que o matcher grava, para a fila de
-    revisão não precisar de dois formatos.
+    `ck_staging_lines_no_match` exige linha **sem** vínculo e motivo não vazio.
+    Limpar `product_id`/`presentation_id` é obrigatório, não higiene: a fila tem
+    linhas em que o matcher **propôs** um vínculo (`PENDING`, com vínculo), e
+    recusá-las deixando o vínculo antigo faria do estado `NO_MATCH` uma mentira —
+    é o mesmo raciocínio que o próprio `db/008` registra. O motivo vai como JSON,
+    na mesma forma que o matcher grava, para a fila não precisar de dois formatos.
     """
     note = json.dumps({"reason": "human_no_match", "note": str(reason)})
     return (
         "UPDATE staging_lines\n"
         "SET review_state = 'NO_MATCH',\n"
         "    reviewed = TRUE,\n"
+        "    product_id = NULL,\n"
+        "    presentation_id = NULL,\n"
         f"    match_note = {_sql_literal(note)}\n"
         f"WHERE id = {_sql_literal(line_id)};"
     )
