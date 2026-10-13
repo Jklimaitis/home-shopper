@@ -286,28 +286,39 @@ class StagingQueryIntegrationTests(unittest.TestCase):
         self.assertEqual(progress["total"], 4)
         self.assertEqual(progress["pending"] + progress["skipped"], 3)
         self.assertEqual(progress["discarded"], 1)
-        # Não existe agregado de "linhas em revisão" aqui: ele seria um segundo nome
-        # para `lines_to_review`, com regra própria -- a divergência silenciosa que
-        # apareceu em duas revisões seguidas.
-        self.assertNotIn("in_review", progress)
+        # O conjunto de chaves tem de ser EXATAMENTE este: assim a rede pega um
+        # agregado ambíguo mesmo que ele volte com outro nome.
+        self.assertEqual(set(progress),
+                         {"total", "resolved", "pending", "skipped", "discarded", "consolidated"})
         self.assertTrue(body["lines"][0]["discarded"])
 
     def test_detail_counters_agree_with_the_queue_view(self):
         # A mesma grandeza medida em dois lugares tem de dar o mesmo número: a fila
-        # (view do banco) e o detalhe (esta rota). O fixture inclui uma linha
-        # RESOLVIDA de propósito: sem ela, `pending + skipped` coincidiria com
-        # qualquer agregado de "não descartadas" e o teste passaria por acidente.
-        self._state(self.receipt_a, "NO_MATCH")
-        self._state(self.receipt_a, "SKIPPED")
+        # (view do banco) e o detalhe (esta rota).
+        #
+        # O fixture é montado para FECHAR a classe, não para passar: 6 linhas, com uma
+        # resolvida viva, uma pulada viva, uma resolvida DESCARTADA e uma pulada
+        # DESCARTADA. Assim (a) a conta do total deixa de fechar se `resolved` ou
+        # `skipped` contarem descartadas, e (b) `pending + skipped` deixa de coincidir
+        # com qualquer agregado de "não descartadas" -- coincidência que fez uma
+        # divergência real passar despercebida na revisão anterior.
+        receipt = self._receipt(self.a, lines=6)
+        for estado in ("NO_MATCH", "NO_MATCH", "SKIPPED", "SKIPPED"):
+            self._state(receipt, estado)
         with self.conn:
             with self.conn.cursor() as cur:
-                cur.execute("""UPDATE staging_lines SET discarded = TRUE
-                               WHERE id = (SELECT id FROM staging_lines WHERE receipt_id = %s
-                                            ORDER BY line_no DESC LIMIT 1)""", (self.receipt_a,))
+                for estado in ("NO_MATCH", "SKIPPED"):
+                    cur.execute("""UPDATE staging_lines SET discarded = TRUE
+                                   WHERE id = (SELECT id FROM staging_lines
+                                                WHERE receipt_id = %s AND review_state = %s
+                                                  AND NOT discarded
+                                                ORDER BY line_no LIMIT 1)""", (receipt, estado))
         fila = next(row for row in self.app.list_staging_receipts(user_id=self.a)
-                    if row["staging_receipt_id"] == self.receipt_a)
-        progress = self.app.list_staging_lines(receipt_id=self.receipt_a, user_id=self.a)["progress"]
-        self.assertEqual(progress["resolved"], 1, "o fixture precisa de uma linha resolvida")
+                    if row["staging_receipt_id"] == receipt)
+        progress = self.app.list_staging_lines(receipt_id=receipt, user_id=self.a)["progress"]
+        self.assertEqual(progress["resolved"], 1, "o fixture precisa de uma resolvida viva")
+        self.assertEqual(progress["skipped"], 1, "o fixture precisa de uma pulada viva")
+        self.assertEqual(progress["discarded"], 2)
         self.assertEqual(progress["total"], fila["total_lines"])
         self.assertEqual(progress["pending"] + progress["skipped"], fila["lines_to_review"])
         self.assertEqual(progress["skipped"], fila["lines_skipped"])

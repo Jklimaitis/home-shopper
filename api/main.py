@@ -545,13 +545,13 @@ def list_staging_lines(receipt_id: str, user_id: str = Depends(get_current_user_
     Confere primeiro se o recibo é deste titular e só então lê as linhas. Recibo
     de outro titular devolve 404 -- e não 403, que confirmaria que ele existe.
 
-    Cada contador do `progress` tem UM par na rota de lista, e só um:
-      `total`            = `total_lines`            (todas as linhas do recibo)
-      `pending + skipped` = `lines_to_review`        (o que ainda deve decisão)
-      `skipped`          = `lines_skipped`
-      `resolved`         = a diferença entre `total_lines` e `lines_to_review`,
-                           descontadas as descartadas
-      `discarded`        = fora da revisão (não é estado de decisão, db/008)
+    Cada contador do `progress` sai de UMA conta e tem no máximo um par na lista:
+      `total`             = `total_lines`        (todas as linhas do recibo)
+      `pending + skipped` = `lines_to_review`    (o que ainda deve decisão)
+      `skipped`           = `lines_skipped`
+      `resolved`          = derivável: `total_lines − lines_to_review − discarded`
+      `discarded`         = sem par na lista (a view não expõe coluna de descartadas)
+      `consolidated`      = sem par (chega junto com a consolidação)
     Não existe aqui um "total em revisão": seria um segundo nome para
     `lines_to_review` com regra própria, e foi assim que a lista e o detalhe
     divergiram em duas revisões seguidas.
