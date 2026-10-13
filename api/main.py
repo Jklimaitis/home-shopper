@@ -458,6 +458,10 @@ class StagingLine(BaseModel):
     match_source: str
     review_state: str
     reviewed: bool
+    # `discarded` não é estado de decisão: a linha está fora da revisão e do
+    # cálculo do recibo (db/008). Vem marcada para a tela distinguir isso de
+    # "pendente".
+    discarded: bool
     match_note: str | None = None
     # `match_note` é texto do banco: o matcher grava JSON com o motivo e, na
     # ambiguidade, a lista de candidatos. Vai cru E interpretado, para a tela não
@@ -466,10 +470,11 @@ class StagingLine(BaseModel):
 
 
 class StagingReviewProgress(BaseModel):
-    total: int
+    total: int  # linhas em revisão: as descartadas ficam de fora, como na view
     resolved: int
     pending: int
     skipped: int
+    discarded: int  # fora da revisão; não é estado de decisão (db/008)
     consolidated: int | None = None  # chega junto com a consolidação (item 3)
 
 
@@ -495,7 +500,7 @@ STAGING_LINES_SQL = """
     SELECT sl.id, sl.line_no, sl.description_raw, sl.store_code, sl.sale_unit,
            sl.quantity, sl.unit_price, sl.discount_line, sl.line_total,
            sl.product_id, sl.presentation_id, sl.match_source, sl.review_state,
-           sl.reviewed, sl.match_note
+           sl.reviewed, sl.discarded, sl.match_note
     FROM staging_lines sl
     WHERE sl.receipt_id = %s
     ORDER BY sl.line_no
@@ -554,13 +559,18 @@ def list_staging_lines(receipt_id: str, user_id: str = Depends(get_current_user_
         conn.close()
 
     lines = [{**row, "match_note_parsed": _match_note_parsed(row.get("match_note"))} for row in rows]
-    # Dict, não instância do modelo: a função devolve dados uniformes e quem valida
-    # o contrato é o `response_model`, na borda HTTP.
+    # A linha descartada sai da conta do progresso -- a MESMA regra que a view da
+    # fila usa (`NOT discarded`), senão a lista e o detalhe discordariam. Ela
+    # continua na resposta, marcada, para a tela distinguir "fora da revisão" de
+    # "pendente". Dict, não instância do modelo: a função devolve dados uniformes e
+    # quem valida o contrato é o `response_model`, na borda HTTP.
+    em_revisao = [row for row in lines if not row["discarded"]]
     progress = {
-        "total": len(lines),
-        "resolved": sum(1 for row in lines if row["review_state"] in ("CONFIRMED", "NO_MATCH")),
-        "pending": sum(1 for row in lines if row["review_state"] == "PENDING"),
-        "skipped": sum(1 for row in lines if row["review_state"] == "SKIPPED"),
+        "total": len(em_revisao),
+        "resolved": sum(1 for row in em_revisao if row["review_state"] in ("CONFIRMED", "NO_MATCH")),
+        "pending": sum(1 for row in em_revisao if row["review_state"] == "PENDING"),
+        "skipped": sum(1 for row in em_revisao if row["review_state"] == "SKIPPED"),
+        "discarded": len(lines) - len(em_revisao),
         "consolidated": None,
     }
     return {"receipt_id": receipt_id, "progress": progress, "lines": lines}

@@ -262,10 +262,29 @@ class StagingQueryIntegrationTests(unittest.TestCase):
                             (state, state, state, receipt))
 
     def test_queue_lists_only_the_callers_receipts(self):
-        rows = self.app.list_staging_receipts(user_id=self.a)
-        ids = {row["staging_receipt_id"] for row in rows}
-        self.assertIn(self.receipt_a, ids)
-        self.assertNotIn(self.receipt_b, ids, "a fila de outro titular vazou")
+        ids_a = {row["staging_receipt_id"] for row in self.app.list_staging_receipts(user_id=self.a)}
+        ids_b = {row["staging_receipt_id"] for row in self.app.list_staging_receipts(user_id=self.b)}
+        # Controle positivo: cada recibo aparece na fila do SEU titular. Sem ele,
+        # "B não está em A" passaria também se a consulta não devolvesse nada.
+        self.assertIn(self.receipt_a, ids_a)
+        self.assertIn(self.receipt_b, ids_b)
+        self.assertNotIn(self.receipt_b, ids_a, "a fila de outro titular vazou")
+        self.assertNotIn(self.receipt_a, ids_b, "a fila de outro titular vazou (inverso)")
+
+    def test_discarded_lines_leave_the_progress_and_are_flagged(self):
+        # `discarded` não é estado de revisão (o db/008 registra que ele é excluído
+        # do cálculo do recibo): a linha sai da conta do progresso -- a mesma regra
+        # que a view da fila usa -- e vem marcada na resposta, senão a tela não
+        # distingue "fora da revisão" de "pendente".
+        with self.conn:
+            with self.conn.cursor() as cur:
+                cur.execute("""UPDATE staging_lines SET discarded = TRUE
+                               WHERE id = (SELECT id FROM staging_lines WHERE receipt_id = %s
+                                            ORDER BY line_no LIMIT 1)""", (self.receipt_a,))
+        body = self.app.list_staging_lines(receipt_id=self.receipt_a, user_id=self.a)
+        self.assertEqual(body["progress"]["discarded"], 1)
+        self.assertEqual(body["progress"]["total"], 3)
+        self.assertTrue(body["lines"][0]["discarded"])
 
     def test_queue_exposes_the_declared_date(self):
         rows = self.app.list_staging_receipts(user_id=self.a)
