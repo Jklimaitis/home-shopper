@@ -4,6 +4,7 @@ import os
 import sys
 import uuid
 from decimal import Decimal, InvalidOperation
+from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -15,7 +16,7 @@ from dotenv import load_dotenv
 from services.matcher import MatchResult, match_staging_line
 # Reuso do crivo que o loader histórico já aplica ao código observado, em vez de
 # uma segunda regra para a mesma coluna.
-from scripts.load_receipts import classify_observed_code
+from scripts.load_receipts import classify_observed_code, iso_date
 
 # A configuração privada só é carregada na execução da CLI, nunca no import.
 _env_path = Path(__file__).resolve().parent.parent / ".env"
@@ -72,6 +73,32 @@ def first_present(mapping: dict, *names: str, default: Any = None) -> Any:
         if name in mapping:
             return mapping[name]
     return default
+
+
+def declared_issue_date(header: dict) -> Optional[str]:
+    """Data de emissão declarada pela nota, normalizada — ou None.
+
+    Uma só regra de parsing: a do loader (`iso_date` aceita `purchase_date`
+    no formato YYYY-MM-DD e `emission` no formato DD/MM/YYYY HH:MM:SS), chamada
+    aqui com o valor bruto sob a chave que ela entende.
+
+    A validação extra com `date.fromisoformat` existe porque a regex do loader
+    aceita mês ou dia fora do calendário (`2026-13-45` combina com o padrão): uma
+    data que não é um dia real vira desconhecida, em vez de virar erro de banco na
+    gravação. E ausência nunca é substituída pelo horário do upload — são dois
+    fatos diferentes (ver `db/019`).
+    """
+    raw = first_present(header, "issued_at", "emission", "purchase_date")
+    if raw is None or not str(raw).strip():
+        return None
+    iso = iso_date({"purchase_date": raw})
+    if iso is None:
+        return None
+    try:
+        date.fromisoformat(iso)
+    except ValueError:
+        return None
+    return iso
 
 
 def parse_note(payload: dict) -> dict: # Normaliza o JSON da NFC-e para o formato interno aderente ao schema.
@@ -148,6 +175,7 @@ def parse_note(payload: dict) -> dict: # Normaliza o JSON da NFC-e para o format
         "source_ref": source_ref,
         "store_cnpj": store_cnpj,
         "store_name": store_name,
+        "issued_at": declared_issue_date(header),
         "total_gross": total_gross,
         "discount_total": discount,
         "amount_paid": amount_paid,
@@ -201,9 +229,9 @@ def insert_staging_receipt(
 
         cur.execute("""
             INSERT INTO staging_receipts (
-                user_id, source, source_ref, store_id, total_gross, discount_total, amount_paid, file_path
+                user_id, source, source_ref, store_id, issued_at, total_gross, discount_total, amount_paid, file_path
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s
             )
             ON CONFLICT (user_id, source, source_ref_norm)
                 WHERE source_ref_norm <> ''
@@ -214,6 +242,7 @@ def insert_staging_receipt(
             source,
             note.get("source_ref"),
             store_id,
+            note.get("issued_at"),
             note["total_gross"],
             note.get("discount_total", Decimal("0")),
             note["amount_paid"],

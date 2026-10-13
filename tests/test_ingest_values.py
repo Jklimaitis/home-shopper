@@ -157,10 +157,34 @@ class IngestValueParserTests(unittest.TestCase):
         payload=valid_note(); payload['header'].update(source_ref=None,access_key='upload-legacy-001')
         self.assertIsNone(ingest.parse_note(payload)['source_ref'])
 
+    def test_declared_issue_date_is_read_and_normalized(self):
+        # A nota declara a data; a ingestão lê os aliases que o loader já aceita e
+        # normaliza com a MESMA função dele -- nada de uma segunda regra.
+        for chave,bruto,esperado in (('issued_at','2026-10-07','2026-10-07'),
+                                     ('emission','07/10/2026 15:22:01','2026-10-07'),
+                                     ('purchase_date','2026-10-07','2026-10-07')):
+            payload=valid_note()
+            payload['header'][chave]=bruto
+            note=ingest.parse_note(payload)
+            self.assertIn('issued_at',note,chave)
+            self.assertEqual(note['issued_at'],esperado,chave)
+
+    def test_missing_or_unreadable_date_stays_unknown(self):
+        # Ausência é estado honesto: não se copia o horário do upload para a data da
+        # compra, e não se grava como data algo que não é um dia real do calendário.
+        for bruto in (None,'','sem data','2026-13-45','31/02/2026 10:00:00'):
+            payload=valid_note()
+            if bruto is not None:
+                payload['header']['issued_at']=bruto
+            note=ingest.parse_note(payload)
+            self.assertIn('issued_at',note,repr(bruto))
+            self.assertIsNone(note['issued_at'],repr(bruto))
+
 
 import os
 import uuid
 import psycopg2
+
 
 
 class IngestValueStorageTests(unittest.TestCase):
@@ -204,6 +228,21 @@ class IngestValueStorageTests(unittest.TestCase):
             cur.execute('SELECT sr.total_gross,sr.discount_total,sr.amount_paid,sl.discount_line FROM staging_receipts sr JOIN staging_lines sl ON sl.receipt_id=sr.id WHERE sr.id=%s',(str(rid),))
             self.assertEqual(cur.fetchone(),(Decimal('10'),Decimal('2'),Decimal('8'),Decimal('1')))
 
+
+    def test_declared_issue_date_reaches_staging_and_absence_stays_null(self):
+        # Com data declarada: gravada no staging. Sem data: NULL -- a nota continua
+        # entrando (a coluna é nullable), e é a consolidação que exige a data.
+        com=valid_note(); com['header'].update(source_ref='date-a-'+uuid.uuid4().hex,issued_at='2026-10-07')
+        rid_com=self.store(com)
+        sem=valid_note(); sem['header'].update(source_ref='date-b-'+uuid.uuid4().hex)
+        rid_sem=self.store(sem)
+        with self.conn.cursor() as cur:
+            cur.execute('SELECT issued_at FROM staging_receipts WHERE id=%s',(str(rid_com),))
+            linha=cur.fetchone(); assert linha is not None
+            self.assertEqual(str(linha[0]),'2026-10-07')
+            cur.execute('SELECT issued_at FROM staging_receipts WHERE id=%s',(str(rid_sem),))
+            linha=cur.fetchone(); assert linha is not None
+            self.assertIsNone(linha[0])
 
     def test_cli_stores_unknown_totals_without_reporting_failure(self):
         import tempfile,json,sys,io
