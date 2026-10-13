@@ -125,6 +125,7 @@ def parse_note(payload: dict) -> dict: # Normaliza o JSON da NFC-e para o format
             "line_no": it.get("line_no") if it.get("line_no") is not None else (it.get("numero_item") or idx),
             "description_raw": it.get("description_raw") or it.get("description") or it.get("descricao") or it.get("nome") or "",
             "store_code": str(it.get("store_code") or it.get("code") or it.get("codigo") or "").strip() or None,
+            "gtin": first_present(it, "gtin", "barcode", "ean"),
             "sale_unit": sale_unit,
             "quantity": required_decimal(first_present(it, "quantity", "quantidade")),
             "unit_price": required_decimal(first_present(it, "unit_price", "valor_unitario")),
@@ -205,12 +206,20 @@ def insert_staging_lines(conn, receipt_id: uuid.UUID, items: list[dict]) -> dict
     stats = {"BARCODE": 0, "DESCRIPTION": 0, "ALIAS": 0, "NONE": 0}
 
     with conn.cursor() as cur:
+        cur.execute("SELECT store_id FROM staging_receipts WHERE id = %s", (str(receipt_id),))
+        receipt = cur.fetchone()
+        if receipt is None:
+            raise ValueError("Recibo staging inexistente.")
+        store_id = str(receipt[0]) if receipt[0] is not None else None
         for item in items:
             raw_desc = item["description_raw"]
             raw_code = item["store_code"]
 
-            # Matching preliminar
-            match: MatchResult = match_staging_line(conn, raw_description=raw_desc, barcode=raw_code)
+            # Código interno não é evidência de GTIN, mesmo com dígitos iguais.
+            match: MatchResult = match_staging_line(
+                conn, raw_description=raw_desc, barcode=item.get("gtin"),
+                store_id=store_id, sale_unit=item["sale_unit"],
+            )
             stats[match.match_source] = stats.get(match.match_source, 0) + 1
 
             cur.execute("""
@@ -237,7 +246,7 @@ def insert_staging_lines(conn, receipt_id: uuid.UUID, items: list[dict]) -> dict
                 match.product_id,
                 match.presentation_id,
                 match.match_source,
-                f"confidence={match.confidence}"
+                json.dumps(match.note) if match.note is not None else f"confidence={match.confidence}"
             ))
 
     return stats

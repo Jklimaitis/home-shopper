@@ -36,12 +36,15 @@ class FakeCursor:
 
     The matcher issues at most two queries per call: first the GTIN lookup,
     then the description lookup. The mock routes by SQL content, so each test
-    controls exactly what the database would return.
+    controls exactly what the database would return. The GTIN lookup reads one
+    row (`fetchone`); the description lookup reads the candidate set
+    (`fetchall`), which the matcher only links when it resolves to a single
+    presentation.
     """
 
-    def __init__(self, gtin_row=None, desc_row=None):
+    def __init__(self, gtin_row=None, desc_rows=None):
         self._gtin_row = gtin_row
-        self._desc_row = desc_row
+        self._desc_rows = list(desc_rows or ())
         self._last_sql = ""
 
     def __enter__(self):
@@ -56,7 +59,10 @@ class FakeCursor:
     def fetchone(self):
         if "presentation_identifiers" in self._last_sql:
             return self._gtin_row
-        return self._desc_row
+        return None
+
+    def fetchall(self):
+        return list(self._desc_rows)
 
 
 class FakeConnection:
@@ -66,15 +72,15 @@ class FakeConnection:
     ProgrammingError, simulating a connection that has been closed.
     """
 
-    def __init__(self, gtin_row=None, desc_row=None, closed=False):
+    def __init__(self, gtin_row=None, desc_rows=None, closed=False):
         self._gtin_row = gtin_row
-        self._desc_row = desc_row
+        self._desc_rows = desc_rows
         self.closed = closed
 
     def cursor(self):
         if self.closed:
             raise RuntimeError("connection closed")
-        return FakeCursor(self._gtin_row, self._desc_row)
+        return FakeCursor(self._gtin_row, self._desc_rows)
 
 
 class TestNormalizeText(unittest.TestCase):
@@ -106,7 +112,7 @@ class TestMatchByBarcode(unittest.TestCase):
         # No barcode provided -> the GTIN query returns None, description query
         # is the next step.
         desc_row = ("pres-uuid-2", "prod-uuid-2")
-        conn = FakeConnection(gtin_row=None, desc_row=desc_row)
+        conn = FakeConnection(gtin_row=None, desc_rows=[desc_row])
         result = match_staging_line(conn, raw_description="FEIJAO 1KG")
         self.assertEqual(result.match_source, "DESCRIPTION")
         self.assertEqual(result.presentation_id, "pres-uuid-2")
@@ -116,7 +122,7 @@ class TestMatchByBarcode(unittest.TestCase):
 class TestMatchByDescription(unittest.TestCase):
     def test_normalized_description_resolves(self):
         desc_row = ("pres-uuid-3", "prod-uuid-3")
-        conn = FakeConnection(gtin_row=None, desc_row=desc_row)
+        conn = FakeConnection(gtin_row=None, desc_rows=[desc_row])
         result = match_staging_line(conn, raw_description="  CARNE   MOIDA  ")
         self.assertEqual(result.match_source, "DESCRIPTION")
         self.assertEqual(result.presentation_id, "pres-uuid-3")
@@ -124,7 +130,7 @@ class TestMatchByDescription(unittest.TestCase):
         self.assertEqual(result.confidence, 0.9)
 
     def test_no_match_returns_none(self):
-        conn = FakeConnection(gtin_row=None, desc_row=None)
+        conn = FakeConnection(gtin_row=None)
         result = match_staging_line(conn, raw_description="PRODUTO INEXISTENTE")
         self.assertEqual(result.match_source, "NONE")
         self.assertIsNone(result.product_id)
