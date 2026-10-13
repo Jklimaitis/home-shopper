@@ -414,6 +414,19 @@ class ReviewInstructionTextTests(unittest.TestCase):
         self.assertIn("presentation_id = NULL",texto)
 
 
+    def test_unlink_command_is_complete_and_isolated(self):
+        # A asserção é sobre a SAÍDA DA FUNÇÃO, não sobre o texto impresso inteiro:
+        # no texto, `presentation_id = NULL` também aparece no comando de recusa, e
+        # uma mutação que tirasse a linha só do desvínculo passaria despercebida.
+        # (O estado final continuaria correto por um segundo trigger -- defesa em
+        # profundidade --, mas a rede de teste ficaria cega para essa direção.)
+        sql=ingest.unlink_line_sql('11111111-1111-1111-1111-111111111111')
+        self.assertIn("UPDATE staging_lines",sql)
+        self.assertIn("SET product_id = NULL",sql)
+        self.assertIn("presentation_id = NULL",sql)
+        self.assertIn("RETURNING id, review_state, reviewed",sql)
+
+
 class ReviewInstructionIntegrationTests(unittest.TestCase):
     """Executa os exemplos impressos contra o schema de verdade."""
 
