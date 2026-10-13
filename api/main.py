@@ -470,7 +470,8 @@ class StagingLine(BaseModel):
 
 
 class StagingReviewProgress(BaseModel):
-    total: int  # linhas em revisão: as descartadas ficam de fora, como na view
+    total: int  # todas as linhas do recibo, igual ao `total_lines` da lista
+    in_review: int  # as que devem uma decisão: `total` menos as descartadas
     resolved: int
     pending: int
     skipped: int
@@ -541,6 +542,11 @@ def list_staging_lines(receipt_id: str, user_id: str = Depends(get_current_user_
 
     Confere primeiro se o recibo é deste titular e só então lê as linhas. Recibo
     de outro titular devolve 404 -- e não 403, que confirmaria que ele existe.
+
+    Os contadores têm de bater com os da fila, grandeza por grandeza: `total` é o
+    `total_lines` da lista, `in_review` é `lines_to_review`, `skipped` é
+    `lines_skipped`, e `discarded` é a diferença entre os dois primeiros. Regra
+    diferente entre a lista (view do banco) e o detalhe seria divergência silenciosa.
     """
     conn = get_connection()
     cur = conn.cursor()
@@ -566,7 +572,11 @@ def list_staging_lines(receipt_id: str, user_id: str = Depends(get_current_user_
     # quem valida o contrato é o `response_model`, na borda HTTP.
     em_revisao = [row for row in lines if not row["discarded"]]
     progress = {
-        "total": len(em_revisao),
+        # `total` espelha o `total_lines` da fila (todas as linhas do recibo);
+        # `in_review` é o que sobra para decidir. A linha descartada continua na
+        # resposta, marcada, para a tela distinguir "fora da revisão" de "pendente".
+        "total": len(lines),
+        "in_review": len(em_revisao),
         "resolved": sum(1 for row in em_revisao if row["review_state"] in ("CONFIRMED", "NO_MATCH")),
         "pending": sum(1 for row in em_revisao if row["review_state"] == "PENDING"),
         "skipped": sum(1 for row in em_revisao if row["review_state"] == "SKIPPED"),

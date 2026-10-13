@@ -282,9 +282,33 @@ class StagingQueryIntegrationTests(unittest.TestCase):
                                WHERE id = (SELECT id FROM staging_lines WHERE receipt_id = %s
                                             ORDER BY line_no LIMIT 1)""", (self.receipt_a,))
         body = self.app.list_staging_lines(receipt_id=self.receipt_a, user_id=self.a)
+        # `total` conta todas as linhas do recibo (como o `total_lines` da fila);
+        # quem sai da conta da decisão é `in_review`.
+        self.assertEqual(body["progress"]["total"], 4)
+        self.assertEqual(body["progress"]["in_review"], 3)
         self.assertEqual(body["progress"]["discarded"], 1)
-        self.assertEqual(body["progress"]["total"], 3)
         self.assertTrue(body["lines"][0]["discarded"])
+
+    def test_detail_counters_agree_with_the_queue_view(self):
+        # A mesma grandeza medida em dois lugares tem de dar o mesmo número: a fila
+        # (view do banco) e o detalhe (esta rota). Foi por uma regra diferente entre
+        # os dois que uma divergência de contagem passou despercebida.
+        self._state(self.receipt_a, "SKIPPED")
+        with self.conn:
+            with self.conn.cursor() as cur:
+                cur.execute("""UPDATE staging_lines SET discarded = TRUE
+                               WHERE id = (SELECT id FROM staging_lines WHERE receipt_id = %s
+                                            ORDER BY line_no DESC LIMIT 1)""", (self.receipt_a,))
+        fila = next(row for row in self.app.list_staging_receipts(user_id=self.a)
+                    if row["staging_receipt_id"] == self.receipt_a)
+        progress = self.app.list_staging_lines(receipt_id=self.receipt_a, user_id=self.a)["progress"]
+        self.assertEqual(progress["total"], fila["total_lines"])
+        self.assertEqual(progress["pending"] + progress["skipped"], fila["lines_to_review"])
+        self.assertEqual(progress["skipped"], fila["lines_skipped"])
+        # Invariantes do detalhe, nas duas direções.
+        self.assertEqual(progress["total"], progress["in_review"] + progress["discarded"])
+        self.assertEqual(progress["in_review"],
+                         progress["resolved"] + progress["pending"] + progress["skipped"])
 
     def test_queue_exposes_the_declared_date(self):
         rows = self.app.list_staging_receipts(user_id=self.a)
@@ -305,11 +329,14 @@ class StagingQueryIntegrationTests(unittest.TestCase):
         self._state(self.receipt_a, "SKIPPED")
         body = self.app.list_staging_lines(receipt_id=self.receipt_a, user_id=self.a)
         self.assertEqual(body["receipt_id"], self.receipt_a)
-        self.assertEqual(body["progress"]["total"], 4)
-        self.assertEqual(body["progress"]["resolved"], 1)
-        self.assertEqual(body["progress"]["skipped"], 1)
-        self.assertEqual(body["progress"]["pending"], 2)
-        self.assertEqual(body["progress"]["consolidated"], None)
+        progress = body["progress"]
+        self.assertEqual(progress["total"], 4)
+        self.assertEqual(progress["in_review"], 4)
+        self.assertEqual(progress["resolved"], 1)
+        self.assertEqual(progress["skipped"], 1)
+        self.assertEqual(progress["pending"], 2)
+        self.assertEqual(progress["discarded"], 0)
+        self.assertEqual(progress["consolidated"], None)
         self.assertEqual(len(body["lines"]), 4)
         self.assertEqual(body["lines"][0]["line_no"], 1)
 
