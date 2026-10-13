@@ -395,8 +395,10 @@ class ReviewInstructionTextTests(unittest.TestCase):
         self.assertIn('UPDATE 0',texto)
         # A recusa pode dar UPDATE 0 por dois motivos diferentes; o texto tem de
         # dizer quais, senão o operador não sabe se errou o id ou se a linha está
-        # confirmada.
-        self.assertIn('id não confere',texto)
+        # confirmada. A asserção usa a frase que só existe no passo 4: a antiga
+        # ('id não confere') já existia no comentário do passo 3 e passava no
+        # código anterior, então não provava nada.
+        self.assertIn('UPDATE 0 tem duas causas',texto)
         self.assertIn('já está CONFIRMED',texto)
 
 
