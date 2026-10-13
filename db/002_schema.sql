@@ -69,9 +69,11 @@ CREATE TABLE staging_lines (
     line_no         SMALLINT              NOT NULL,
     -- Exactly as it came off the receipt.
     description_raw TEXT                  NOT NULL,
-    -- The store's internal 7-digit code. Search aid during capture only;
-    -- it is the EMITTER's number, so it never becomes a matching key
-    -- (see presentations for why).
+    -- Code as printed on the receipt, usually the emitter's internal item
+    -- number. It is NOT a global product identity. Exception: when the printed
+    -- value passes the GS1 screen (length 8/12/13/14 + mod-10 check digit), it
+    -- becomes a REVIEWABLE LINK CANDIDATE — never a discard, never a confirmed
+    -- match. The link stays pending human review (see ADR-0002).
     store_code      TEXT,
     -- Unit as printed: "UN", "PC", "KG", "CX".
     sale_unit       TEXT                  NOT NULL,

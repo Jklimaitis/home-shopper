@@ -62,6 +62,12 @@ A pessoa autorizada pode corrigir associações de produto e apresentação, int
 
 Recomenda-se correção rastreável com revalidação, em vez de bloquear toda edição após consolidação ou permitir sobrescrita livre. Exclusão de compra, cancelamento fiscal, reversão de uma correção e mesclagem de duplicatas não são autorizados implicitamente por essa possibilidade.
 
+## Exceção registrada em 2026-10-12: candidato por dígito verificador
+
+O código impresso pela loja (`store_code`) não é identidade global e não substitui o GTIN declarado nem a descrição — as regras 1-7 acima permanecem como registro histórico. Exceção registrada em 2026-10-12: quando o valor impresso passa no crivo GS1 (comprimento 8/12/13/14 mais dígito verificador mod-10), ele deixa de ser apenas auxílio de captura e vira **candidato revisável de vínculo** — nem descarte, nem confirmação. O candidato permanece **pendente de revisão humana** e não publica confiança numérica: a validação registrada é `gs1_mod10`, e não há campo `confidence` no ramo candidato (decisão aprovada em 2026-10-12).
+
+Esta seção não altera o status proposto da ADR nem as regras anteriores; registra apenas a exceção posterior, datada, para que a documentação reflita o comportamento autorizado.
+
 ## Exemplos ilustrativos
 
 | Situação | Tratamento proposto |

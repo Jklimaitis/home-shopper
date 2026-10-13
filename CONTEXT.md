@@ -25,6 +25,9 @@ _Evitar_: tratar semelhança textual como confirmação de equivalência.
 **Código interno da loja**: identificador atribuído pelo emissor ao item vendido, com significado no contexto daquela loja. Pode estar ausente e não identifica globalmente o produto.
 _Evitar_: tratá-lo como EAN ou como identidade compartilhada entre lojas.
 
+**Candidato de vínculo (código impresso validado por GS1)**: código impresso pela loja que passa no crivo GS1 (comprimento 8/12/13/14 mais dígito verificador mod-10) e, por isso, pode sugerir um vínculo revisável — nunca um descarte nem uma confirmação de identidade. O candidato permanece pendente de revisão humana até que a associação seja confirmada ou descartada.
+_Evitar_: tratar validação GS1 como certeza de equivalência ou como rejeição automática do código.
+
 **EAN**: identificador do item comercial associado ao código de barras de sua embalagem. Apresentações de um mesmo produto canônico podem ter identificadores diferentes; sua ausência não impede uma equivalência confirmada por outras informações.
 _Evitar_: tratá-lo como código interno de loja ou como identificador obrigatório do produto canônico.
 
