@@ -11,28 +11,28 @@ from typing import Any, Dict, List, Optional, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import psycopg2
+from dotenv import load_dotenv
 from services.matcher import MatchResult, match_staging_line
 
-# ─── Configuração ───────────────────────────────────────────────
-# Carrega .env do projeto se existir (para DB_PASSWORD etc.)
+# A configuração privada só é carregada na execução da CLI, nunca no import.
 _env_path = Path(__file__).resolve().parent.parent / ".env"
-if _env_path.is_file():
-    for _line in _env_path.read_text(encoding="utf-8").splitlines():
-        _line = _line.strip()
-        if _line and not _line.startswith("#") and "=" in _line:
-            _k, _v = _line.split("=", 1)
-            os.environ.setdefault(_k.strip(), _v.strip())
 
-# Se DATABASE_URL não estiver definido, constrói o DSN a partir das variáveis DB_*
-if "DATABASE_URL" not in os.environ:
-    _db_host = os.getenv("DB_HOST", "localhost")
-    _db_port = os.getenv("DB_PORT", "5432")
-    _db_name = os.getenv("DB_NAME", "home_shopper")
-    _db_user = os.getenv("DB_USER", "home_shopper")
-    _db_pass = os.getenv("DB_PASSWORD", "")
-    DB_DSN = f"dbname={_db_name} user={_db_user} host={_db_host} port={_db_port} password={_db_pass}"
-else:
-    DB_DSN = os.environ["DATABASE_URL"]
+def connect_database():
+    """Conecta sem interpolar credenciais em uma string de parâmetros."""
+    if "DATABASE_URL" in os.environ:
+        url = os.environ["DATABASE_URL"]
+        if not url.strip():
+            raise ValueError("Configuração de conexão inválida.")
+        return psycopg2.connect(url)
+    return psycopg2.connect(
+        host=os.getenv("DB_HOST", "localhost"),
+        port=os.getenv("DB_PORT", "5432"),
+        dbname=os.getenv("DB_NAME", "home_shopper"),
+        user=os.getenv("DB_USER", "home_shopper"),
+        password=os.getenv("DB_PASSWORD", ""),
+    )
+
+
 DEFAULT_USER_ID = os.getenv("DEFAULT_USER_ID", "00000000-0000-0000-0000-000000000001")
 
 
@@ -151,16 +151,8 @@ def insert_staging_receipt(
     file_path: Optional[str] = None
 ) -> uuid.UUID: # Insere em staging_receipts e retorna o receipt_id (UUID).
     with conn.cursor() as cur:
-        # Idempotência: verifica duplicação por source_ref (chave de 44 dígitos)
-        if note.get("source_ref"):
-            cur.execute(
-                "SELECT id FROM staging_receipts WHERE source_ref = %s LIMIT 1;",
-                (note["source_ref"],)
-            )
-            existing = cur.fetchone()
-            if existing:
-                raise ValueError(f"Cupom já importado anteriormente em staging (ID: {existing[0]}).")
-
+        # O índice decide a duplicata atomicamente por usuário, origem e
+        # referência normalizada; não consultar referências de outros titulares.
         store_id = resolve_or_create_store(conn, note.get("store_cnpj"), note.get("store_name"))
 
         cur.execute("""
@@ -168,7 +160,11 @@ def insert_staging_receipt(
                 user_id, source, source_ref, store_id, total_gross, amount_paid, file_path
             ) VALUES (
                 %s, %s, %s, %s, %s, %s, %s
-            ) RETURNING id;
+            )
+            ON CONFLICT (user_id, source, source_ref_norm)
+                WHERE source_ref_norm <> ''
+                DO NOTHING
+            RETURNING id;
         """, (
             user_id,
             source,
@@ -178,7 +174,10 @@ def insert_staging_receipt(
             note["amount_paid"],
             file_path
         ))
-        return cur.fetchone()[0]
+        row = cur.fetchone()
+        if row is None:
+            raise ValueError("Cupom já importado para este usuário e origem.")
+        return row[0]
 
 
 def insert_staging_lines(conn, receipt_id: uuid.UUID, items: list[dict]) -> dict:
@@ -254,9 +253,15 @@ WHERE receipt_id = '{receipt_id}' AND match_source = 'NONE';
 # ─── Main ───────────────────────────────────────────────────────
 
 def main():
+    try:
+        load_dotenv(dotenv_path=_env_path, override=False)
+    except Exception:
+        print("[!] Não foi possível carregar a configuração da importação.")
+        sys.exit(1)
+    default_user_id = os.getenv("DEFAULT_USER_ID", DEFAULT_USER_ID)
     parser = argparse.ArgumentParser(description="Ingestão de NFC-e em staging para conferência e matching.")
     parser.add_argument("file", type=Path, help="Caminho do arquivo JSON da NFC-e")
-    parser.add_argument("--user-id", default=DEFAULT_USER_ID, help=f"UUID do usuário (default: {DEFAULT_USER_ID})")
+    parser.add_argument("--user-id", default=default_user_id, help=f"UUID do usuário (default: {default_user_id})")
     parser.add_argument(
         "--source",
         choices=["MANUAL", "QRCODE", "SEFAZ", "OCR", "IMPORT"],
@@ -267,21 +272,23 @@ def main():
     args = parser.parse_args()
 
     if not args.file.is_file():
-        print(f"Erro: Arquivo '{args.file}' não encontrado.")
+        print("[!] Arquivo de entrada não encontrado.")
         sys.exit(1)
 
     try:
         with open(args.file, "r", encoding="utf-8") as f:
             raw_data = json.load(f)
-    except json.JSONDecodeError as err:
-        print(f"Erro ao ler JSON: {err}")
+        parsed_note = parse_note(raw_data)
+    except json.JSONDecodeError:
+        print("[!] Arquivo JSON inválido.")
         sys.exit(1)
-
-    parsed_note = parse_note(raw_data)
+    except Exception:
+        print("[!] Não foi possível ler ou interpretar a entrada.")
+        sys.exit(1)
 
     conn = None
     try:
-        conn = psycopg2.connect(DB_DSN)
+        conn = connect_database()
         with conn:  # Bloco transacional atômico (BEGIN / COMMIT)
             receipt_id = insert_staging_receipt(
                 conn=conn,
@@ -303,24 +310,22 @@ def main():
 
         print_review_instructions(receipt_id)
 
-    except psycopg2.Error as db_err:
-        if conn:
-            conn.rollback()
-        print(f"\n[!] Erro de banco de dados: {db_err}")
+    except psycopg2.Error:
+        print("\n[!] Erro de banco de dados. A importação não foi concluída.")
         sys.exit(1)
-    except ValueError as val_err:
-        if conn:
-            conn.rollback()
-        print(f"\n[!] Validação: {val_err}")
+    except ValueError:
+        print("\n[!] Dados inválidos ou cupom já importado para este usuário e origem.")
         sys.exit(1)
-    except Exception as exc:
-        if conn:
-            conn.rollback()
-        print(f"\n[!] Falha inesperada: {exc}")
+    except Exception:
+        print("\n[!] Falha inesperada. A importação não foi concluída.")
         sys.exit(1)
     finally:
-        if conn and not conn.closed:
-            conn.close()
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                print("[!] Não foi possível encerrar a conexão de banco.")
+                sys.exit(1)
 
 
 if __name__ == "__main__":
