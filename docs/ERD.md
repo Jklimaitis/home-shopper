@@ -77,7 +77,7 @@ erDiagram
         integer   multipack_quantity "NULL or > 1"
         enum      sale_unit_recognized "controlled vocabulary"
         numeric   factor_base "base units per sale unit"
-        enum      review_state "PENDING, REVIEWED, NO_MATCH"
+        enum      review_state "PENDING, CONFIRMED, NO_MATCH, SKIPPED"
         timestamptz created_at
         timestamptz updated_at
     }
@@ -151,7 +151,7 @@ erDiagram
         uuid      receipt_id FK
         smallint  line_no
         text      description_raw
-        text      store_code "emitter's 7-digit code, search aid only"
+        text      store_code "emitter's 7-digit code, search aid; GS1-validated values become review candidates"
         text      sale_unit "verbatim, only non-blank"
         numeric   quantity
         numeric   unit_price
@@ -381,7 +381,10 @@ The 7-digit code on the receipt belongs to the *emitter*: the same cut of beef
 carries a different code at every CNPJ, and this project exists to compare
 **between** stores. A matching key that changes between the stores you want to
 compare is not a key — it is confident noise. The code lives in `staging_lines`,
-where it speeds up capture, and is never propagated.
+where it speeds up capture, and is not propagated as identity. When the printed
+value passes the GS1 check (length 8/12/13/14 plus mod-10 check digit) it
+becomes a **review candidate**, never a discard nor a confirmation, and the
+link stays pending human review.
 
 **3. `base_price` is derived, never typed.**
 The trigger `tr_line_items_base_price` computes `unit_price / factor_base` and

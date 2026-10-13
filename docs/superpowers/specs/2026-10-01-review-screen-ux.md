@@ -87,7 +87,7 @@ entrada; ela é alcançada a partir da nota.
 - `description_raw` — a descrição como veio do cupom. É o que o usuário precisa ler para decidir.
   O comentário da view registra por quê: "Without them the review screen showed a NULL and the user
   had no way to decide what to match."
-- `store_code` — código interno do emissor. Auxílio de leitura, **nunca** chave de match.
+- `store_code` — código interno do emissor. Auxílio de leitura; quando validado por GS1 é candidato revisável de vínculo, nunca descarte nem confirmação — segue pendente de revisão humana.
 - `sale_unit` — unidade como impressa (`UN`, `PC`, `KG`, `CX`).
 - `quantity`, `unit_price`, `line_total`, `discount_line` — valores originais.
 - `product_id`, `presentation_id` — o vínculo, quando existe.

@@ -607,7 +607,7 @@ home_shopper/
   - Preservar `description_raw` exatamente como impresso
   - Preservar valores originais da fonte (`sale_unit` incluído, mesmo rótulo opaco)
   - Campos não legíveis permanecem `null` — nunca inferidos
-  - `store_code` é auxílio de leitura, nunca chave de match
+  - `store_code` é auxílio de leitura; quando passa no crivo GS1 vira candidato revisável de vínculo, nunca descarte nem confirmação — permanece pendente de revisão humana
 - **Critérios de Aceite:**
   - [ ] Nota com 56 linhas tem as 56 linhas em `staging_lines`
   - [ ] `description_raw` é byte a byte igual à fonte

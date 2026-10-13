@@ -28,7 +28,9 @@ same price. Every price is re-expressed in the product's **base unit**
 Across 42 line items in three receipts, **zero** had an EAN. The 7-digit
 code printed on the receipt belongs to the *emitter* and changes between
 CNPJs, so it is not an identity either. Real identity is
-`brand + normalised name + size`.
+`brand + normalised name + size`. Exception: when the printed value passes the
+GS1 check it becomes a review candidate — never a discard nor a confirmation —
+and stays pending human review.
 
 ---
 
