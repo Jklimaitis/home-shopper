@@ -81,10 +81,39 @@ class MatcherContextTests(unittest.TestCase):
             assert row is not None
             return row
 
-    def test_internal_code_matching_gtin_is_not_treated_as_barcode(self):
+    def test_valid_store_code_is_proposed_as_barcode_candidate(self):
+        # '7891000412855' é EAN-13 válido; o setUp já o registrou em presentation_identifiers.
         row = self.ingest_item(code='7891000412855')
-        self.assertEqual(row[:3], (None,None,'NONE'))
-        self.assertEqual(row[3:6], ('PENDING',False,'7891000412855'))
+        self.assertEqual(row[:3], (self.pa, self.pra, 'BARCODE'))
+        note = json.loads(row[6])
+        self.assertEqual(note['reason'], 'gtin_candidate_from_store_code')
+        self.assertEqual(note['source_field'], 'store_code')
+        self.assertEqual(note['validation'], 'gs1_mod10')
+        self.assertEqual(row[3:6], ('PENDING', False, '7891000412855'))
+
+
+    def test_short_store_code_is_not_barcode_evidence(self):
+        row = self.ingest_item(code='1234')
+        self.assertEqual(row[:3], (None, None, 'NONE'))
+        self.assertEqual(json.loads(row[6])['reason'], 'no_match')
+        self.assertEqual(row[3:6], ('PENDING', False, '1234'))
+
+
+    def test_declared_gtin_is_barcode_with_declared_provenance(self):
+        row = self.ingest_item(gtin='7891000412855')
+        self.assertEqual(row[:3], (self.pa, self.pra, 'BARCODE'))
+        note = json.loads(row[6])
+        self.assertEqual(note['reason'], 'barcode_declared')
+        self.assertEqual(note['source_field'], 'gtin')
+
+
+    def test_declared_gtin_with_bad_check_digit_does_not_hijack_the_match(self):
+        # Dígito verificador errado é leitura ruim, não valor a reparar: a linha
+        # não pode ficar vinculada por um código que não fecha a conta.
+        self.add_source(self.pra, self.sa)
+        row = self.ingest_item(description='CONTEXT ITEM', gtin='7891000412850')
+        self.assertEqual(row[:3], (self.pa, self.pra, 'DESCRIPTION'))
+        self.assertEqual(json.loads(row[6])['reason'], 'description')
 
 
     def test_description_is_scoped_to_the_receipt_store(self):
@@ -93,6 +122,7 @@ class MatcherContextTests(unittest.TestCase):
         row = self.ingest_item(store='B',description='CONTEXT ITEM')
         self.assertEqual(row[:3],(self.pb,self.prc,'DESCRIPTION'))
         self.assertEqual(row[3:5],('PENDING',False))
+        self.assertEqual(json.loads(row[6])['reason'],'description')
 
 
     def test_conflicting_global_and_store_candidates_remain_unselected(self):

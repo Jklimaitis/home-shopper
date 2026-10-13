@@ -21,6 +21,19 @@ def normalize_text(text: str) -> str: # remover acentos, tudo minuscilo e espaç
     return " ".join(cleaned.lower().split())
 
 
+def barcode_note(source_field: str) -> dict:
+    """Motivo do vínculo por código de barras, com a procedência do número.
+
+    `gtin` é campo declarado da fonte. `store_code` é o código impresso pela loja
+    que passou no crivo do GS1: é candidato verossímil, não confirmação de
+    identidade — por isso a procedência fica registrada.
+    """
+    if source_field == "gtin":
+        return {"reason": "barcode_declared", "confidence": 1.0, "source_field": "gtin"}
+    return {"reason": "gtin_candidate_from_store_code", "confidence": 1.0,
+            "source_field": source_field, "validation": "gs1_mod10"}
+
+
 def match_staging_line(
     conn: psycopg2.extensions.connection,
     raw_description: str,
@@ -28,6 +41,7 @@ def match_staging_line(
     *,
     store_id: Optional[str] = None,
     sale_unit: Optional[str] = None,
+    barcode_source: str = "gtin",
 ) -> MatchResult:
     with conn.cursor() as cur:
         # 1. Match por GTIN / Codigo de barra em presentation_identifiers
@@ -45,7 +59,8 @@ def match_staging_line(
                     presentation_id=str(row[0]),
                     product_id=str(row[1]),
                     match_source="BARCODE",
-                    confidence=1.0
+                    confidence=1.0,
+                    note=barcode_note(barcode_source),
                 )
 
         # 2. Match por descrição em presentation_sources
@@ -84,7 +99,8 @@ def match_staging_line(
                     presentation_id=str(row[0]),
                     product_id=str(row[1]),
                     match_source="DESCRIPTION",
-                    confidence=0.9
+                    confidence=0.9,
+                    note={"reason": "description", "confidence": 0.9},
                 )
 
     # 3. Nenhum match encontrado
@@ -92,5 +108,6 @@ def match_staging_line(
         product_id=None,
         presentation_id=None,
         match_source="NONE",
-        confidence=0.0
+        confidence=0.0,
+        note={"reason": "no_match"},
     )

@@ -156,5 +156,30 @@ class TestErrorPropagation(unittest.TestCase):
         self.assertTrue(raised)
 
 
+class TestMatchNoteVocabulary(unittest.TestCase):
+    """O motivo do match mora em `note`, numa forma só: {"reason": ...}."""
+
+    def test_barcode_declared_records_reason(self):
+        conn = FakeConnection(gtin_row=("pres-uuid-1", "prod-uuid-1"))
+        result = match_staging_line(conn, raw_description="ARROZ 5KG",
+                                    barcode="7891000412855")
+        self.assertEqual(result.match_source, "BARCODE")
+        self.assertEqual(result.note, {"reason": "barcode_declared",
+                                       "confidence": 1.0,
+                                       "source_field": "gtin"})
+
+    def test_description_records_confidence_in_note(self):
+        conn = FakeConnection(gtin_row=None, desc_rows=[("pres-uuid-3", "prod-uuid-3")])
+        result = match_staging_line(conn, raw_description="  CARNE   MOIDA  ")
+        self.assertEqual(result.match_source, "DESCRIPTION")
+        self.assertEqual(result.note, {"reason": "description", "confidence": 0.9})
+
+    def test_no_match_records_reason(self):
+        conn = FakeConnection(gtin_row=None)
+        result = match_staging_line(conn, raw_description="PRODUTO INEXISTENTE")
+        self.assertEqual(result.match_source, "NONE")
+        self.assertEqual(result.note, {"reason": "no_match"})
+
+
 if __name__ == "__main__":
     unittest.main()

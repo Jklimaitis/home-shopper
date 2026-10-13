@@ -13,6 +13,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import psycopg2
 from dotenv import load_dotenv
 from services.matcher import MatchResult, match_staging_line
+# Reuso do crivo que o loader histórico já aplica ao código observado, em vez de
+# uma segunda regra para a mesma coluna.
+from scripts.load_receipts import classify_observed_code
 
 # A configuração privada só é carregada na execução da CLI, nunca no import.
 _env_path = Path(__file__).resolve().parent.parent / ".env"
@@ -121,11 +124,19 @@ def parse_note(payload: dict) -> dict: # Normaliza o JSON da NFC-e para o format
         sale_unit = first_present(it, "sale_unit", "unit", "unidade")
         if not isinstance(sale_unit, str) or not sale_unit.strip():
             raise ValueError("Unidade de venda obrigatória ausente ou inválida.")
+        store_code = str(it.get("store_code") or it.get("code") or it.get("codigo") or "").strip() or None
+        # GTIN declarado só vale se fechar a conta do dígito verificador: leitura
+        # errada é leitura ruim, não valor a reparar.
+        declared_gtin, _ = classify_observed_code(first_present(it, "gtin", "barcode", "ean"))
+        # O código impresso pela loja é candidato, nunca confirmação: só identifica
+        # uma apresentação quando passa no mesmo crivo (comprimento GS1 + dígito).
+        store_code_gtin, _ = classify_observed_code(store_code)
         items.append({
             "line_no": it.get("line_no") if it.get("line_no") is not None else (it.get("numero_item") or idx),
             "description_raw": it.get("description_raw") or it.get("description") or it.get("descricao") or it.get("nome") or "",
-            "store_code": str(it.get("store_code") or it.get("code") or it.get("codigo") or "").strip() or None,
-            "gtin": first_present(it, "gtin", "barcode", "ean"),
+            "store_code": store_code,
+            "gtin": declared_gtin,
+            "gtin_from_store_code": store_code_gtin,
             "sale_unit": sale_unit,
             "quantity": required_decimal(first_present(it, "quantity", "quantidade")),
             "unit_price": required_decimal(first_present(it, "unit_price", "valor_unitario")),
@@ -215,10 +226,19 @@ def insert_staging_lines(conn, receipt_id: uuid.UUID, items: list[dict]) -> dict
             raw_desc = item["description_raw"]
             raw_code = item["store_code"]
 
-            # Código interno não é evidência de GTIN, mesmo com dígitos iguais.
+            # GTIN declarado tem prioridade; o código impresso pela loja entra só
+            # como candidato, quando passa no crivo do dígito verificador.
+            if item.get("gtin"):
+                barcode, barcode_source = item["gtin"], "gtin"
+            elif item.get("gtin_from_store_code"):
+                barcode, barcode_source = item["gtin_from_store_code"], "store_code"
+            else:
+                barcode, barcode_source = None, "gtin"
+
             match: MatchResult = match_staging_line(
-                conn, raw_description=raw_desc, barcode=item.get("gtin"),
+                conn, raw_description=raw_desc, barcode=barcode,
                 store_id=store_id, sale_unit=item["sale_unit"],
+                barcode_source=barcode_source,
             )
             stats[match.match_source] = stats.get(match.match_source, 0) + 1
 
@@ -246,7 +266,7 @@ def insert_staging_lines(conn, receipt_id: uuid.UUID, items: list[dict]) -> dict
                 match.product_id,
                 match.presentation_id,
                 match.match_source,
-                json.dumps(match.note) if match.note is not None else f"confidence={match.confidence}"
+                json.dumps(match.note) if match.note is not None else None
             ))
 
     return stats
