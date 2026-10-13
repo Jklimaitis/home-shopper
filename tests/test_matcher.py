@@ -180,6 +180,18 @@ class TestMatchNoteVocabulary(unittest.TestCase):
         self.assertEqual(result.match_source, "NONE")
         self.assertEqual(result.note, {"reason": "no_match"})
 
+    def test_barcode_candidate_from_store_code_has_no_confidence(self):
+        # O declarado afirma identidade; o candidato não quantifica a incerteza.
+        # Publicar 1.0 aqui faria uma tela ordenada por confiança ler o candidato
+        # como certeza.
+        conn = FakeConnection(gtin_row=("pres-uuid-9", "prod-uuid-9"))
+        result = match_staging_line(conn, raw_description="ARROZ 5KG",
+                                    barcode="7891000412855", barcode_source="store_code")
+        self.assertEqual(result.match_source, "BARCODE")
+        self.assertEqual(result.note, {"reason": "gtin_candidate_from_store_code",
+                                       "source_field": "store_code",
+                                       "validation": "gs1_mod10"})
+
 
 if __name__ == "__main__":
     unittest.main()

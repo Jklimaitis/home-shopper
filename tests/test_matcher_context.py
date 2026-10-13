@@ -89,6 +89,8 @@ class MatcherContextTests(unittest.TestCase):
         self.assertEqual(note['reason'], 'gtin_candidate_from_store_code')
         self.assertEqual(note['source_field'], 'store_code')
         self.assertEqual(note['validation'], 'gs1_mod10')
+        # Candidato não é certeza: a confiança do declarado não se aplica aqui.
+        self.assertNotIn('confidence', note)
         self.assertEqual(row[3:6], ('PENDING', False, '7891000412855'))
 
 

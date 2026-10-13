@@ -24,13 +24,16 @@ def normalize_text(text: str) -> str: # remover acentos, tudo minuscilo e espaç
 def barcode_note(source_field: str) -> dict:
     """Motivo do vínculo por código de barras, com a procedência do número.
 
-    `gtin` é campo declarado da fonte. `store_code` é o código impresso pela loja
-    que passou no crivo do GS1: é candidato verossímil, não confirmação de
-    identidade — por isso a procedência fica registrada.
+    `gtin` é campo declarado da fonte e afirma identidade, por isso leva
+    confiança 1.0. `store_code` é o código impresso pela loja que passou no crivo
+    do GS1: é candidato verossímil, não confirmação — a incerteza está na origem
+    do número, não no casamento, e por isso não recebe número de confiança. Um
+    valor inventado aqui faria uma tela ordenada por confiança ler o candidato
+    como certeza.
     """
     if source_field == "gtin":
         return {"reason": "barcode_declared", "confidence": 1.0, "source_field": "gtin"}
-    return {"reason": "gtin_candidate_from_store_code", "confidence": 1.0,
+    return {"reason": "gtin_candidate_from_store_code",
             "source_field": source_field, "validation": "gs1_mod10"}
 
 
