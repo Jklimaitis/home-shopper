@@ -155,23 +155,36 @@ def parse_note(payload: dict) -> dict: # Normaliza o JSON da NFC-e para o format
     }
 
 
-def resolve_or_create_store(conn, cnpj: Optional[str], store_name: str) -> Optional[uuid.UUID]: # Obtém store_id existente por CNPJ ou cadastra nova loja preliminarmente.
+def resolve_or_create_store(conn, cnpj: Optional[str], store_name: str) -> Optional[uuid.UUID]:
+    """Resolve a loja pelo CNPJ e cria quando falta, sem abortar importação concorrente.
+
+    A decisão é do índice, não de uma consulta anterior: entre um SELECT e o
+    INSERT outra transação pode criar a mesma loja — foi assim que uma importação
+    legítima concorrente morria com UniqueViolation (23505). `ON CONFLICT ...
+    DO NOTHING` espera a transação concorrente terminar; quando ela vence, o id
+    vem do SELECT seguinte, já visível.
+    """
     if not cnpj:
         return None
 
     with conn.cursor() as cur:
-        cur.execute("SELECT id FROM stores WHERE cnpj = %s LIMIT 1;", (cnpj,))
+        cur.execute("""
+            INSERT INTO stores (name, cnpj)
+            VALUES (%s, %s)
+            ON CONFLICT (cnpj) DO NOTHING
+            RETURNING id;
+        """, (store_name, cnpj))
         row = cur.fetchone()
         if row:
             return row[0]
 
-        # Cria loja automaticamente se não existir
-        cur.execute("""
-            INSERT INTO stores (name, cnpj)
-            VALUES (%s, %s)
-            RETURNING id;
-        """, (store_name, cnpj))
-        return cur.fetchone()[0]
+        # Nada foi inserido: a loja já existia, criada por esta transação antes ou
+        # por outra que acabou de terminar.
+        cur.execute("SELECT id FROM stores WHERE cnpj = %s;", (cnpj,))
+        row = cur.fetchone()
+        if row is None:
+            raise ValueError("Loja não pôde ser criada nem localizada.")
+        return row[0]
 
 
 def insert_staging_receipt(
@@ -272,8 +285,60 @@ def insert_staging_lines(conn, receipt_id: uuid.UUID, items: list[dict]) -> dict
     return stats
 
 
+PLACEHOLDER_LINE = '<UUID_STAGING_LINE>'
+PLACEHOLDER_PRODUCT = '<UUID_PRODUCT>'
+PLACEHOLDER_PRESENTATION = '<UUID_PRESENTATION>'
+PLACEHOLDER_REASON = '<MOTIVO_EM_TEXTO>'
+
+
+def _sql_literal(value: str) -> str:
+    """Literal SQL entre aspas simples, com a aspa duplicada."""
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def confirm_line_sql(line_id: str, product_id: str, presentation_id: str) -> str:
+    """UPDATE que confirma um vínculo, coerente com o estado e com o espelho legado.
+
+    `ck_staging_lines_review_state_reviewed` exige `reviewed = (review_state IN
+    ('CONFIRMED','NO_MATCH'))`, e `ck_staging_lines_confirmed` exige os dois
+    vínculos. Marcar `reviewed = TRUE` sem mudar `review_state` é rejeitado pelo
+    banco — o exemplo tem de aplicar a decisão inteira.
+    """
+    return (
+        "UPDATE staging_lines\n"
+        f"SET product_id = {_sql_literal(product_id)},\n"
+        f"    presentation_id = {_sql_literal(presentation_id)},\n"
+        "    match_source = 'MANUAL',\n"
+        "    review_state = 'CONFIRMED',\n"
+        "    reviewed = TRUE\n"
+        f"WHERE id = {_sql_literal(line_id)};"
+    )
+
+
+def no_match_line_sql(line_id: str, reason: str) -> str:
+    """UPDATE que recusa todos os candidatos, com o motivo no `match_note`.
+
+    `ck_staging_lines_no_match` exige linha **sem** vínculo e motivo não vazio;
+    o motivo vai como JSON, na mesma forma que o matcher grava, para a fila de
+    revisão não precisar de dois formatos.
+    """
+    note = json.dumps({"reason": "human_no_match", "note": str(reason)})
+    return (
+        "UPDATE staging_lines\n"
+        "SET review_state = 'NO_MATCH',\n"
+        "    reviewed = TRUE,\n"
+        f"    match_note = {_sql_literal(note)}\n"
+        f"WHERE id = {_sql_literal(line_id)};"
+    )
+
+
 def print_review_instructions(receipt_id: uuid.UUID) -> None:
-    """Imprime queries formatadas para inspeção e revisão via psql."""
+    """Imprime consultas e exemplos executáveis de revisão via psql.
+
+    Os dois exemplos são os mesmos comandos que o operador roda: preencha os
+    campos entre `<>` e execute. Eles nascem das funções acima, então não podem
+    divergir do que é aceito pelo schema.
+    """
     print("\n" + "=" * 65)
     print("📋 SQL PARA REVISÃO EM STAGING")
     print("=" * 65)
@@ -290,13 +355,11 @@ SELECT id, line_no, description_raw, store_code, line_total
 FROM staging_lines
 WHERE receipt_id = '{receipt_id}' AND match_source = 'NONE';
 
--- 3. Atualizar/revisar linha manualmente:
--- UPDATE staging_lines
--- SET product_id = '<UUID_PRODUCT>',
---     presentation_id = '<UUID_PRESENTATION>',
---     match_source = 'MANUAL',
---     reviewed = TRUE
--- WHERE id = '<UUID_STAGING_LINE>';
+-- 3. Confirmar o vínculo de uma linha (preencha os campos entre <> e rode):
+{confirm_line_sql(PLACEHOLDER_LINE, PLACEHOLDER_PRODUCT, PLACEHOLDER_PRESENTATION)}
+
+-- 4. Recusar todos os candidatos, com motivo (a linha precisa ficar sem vínculo):
+{no_match_line_sql(PLACEHOLDER_LINE, PLACEHOLDER_REASON)}
 """)
 
 

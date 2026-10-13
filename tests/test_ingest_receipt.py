@@ -352,5 +352,182 @@ class IngestConnectionTests(unittest.TestCase):
             self.assertEqual(kwargs['dbname'],'hs_ingest_test_unit')
 
 
+class ReviewInstructionTextTests(unittest.TestCase):
+    """Os exemplos de revisão impressos pela CLI têm de ser executáveis.
+
+    Instrução comentada é instrução que não roda, e um exemplo que o próprio
+    schema rejeita é armadilha para o operador.
+    """
+
+    def test_printed_instructions_show_both_decisions_as_runnable_sql(self):
+        buf=io.StringIO()
+        with patch('sys.stdout',buf):
+            ingest.print_review_instructions(uuid.uuid4())
+        text=buf.getvalue()
+        self.assertIn("review_state = 'CONFIRMED'",text)
+        self.assertIn("review_state = 'NO_MATCH'",text)
+        self.assertNotIn('-- UPDATE',text)
+
+    def test_no_match_sql_escapes_single_quotes_in_the_reason(self):
+        sql=ingest.no_match_line_sql('11111111-1111-1111-1111-111111111111',"motivo com 'aspas'")
+        self.assertIn("''aspas''",sql)
+
+
+class ReviewInstructionIntegrationTests(unittest.TestCase):
+    """Executa os exemplos impressos contra o schema de verdade."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dsn=os.environ.get('HS_INGEST_TEST_DSN')
+        if not cls.dsn:
+            raise unittest.SkipTest('Integration requires disposable HS_INGEST_TEST_DSN')
+        cls.conn=psycopg2.connect(cls.dsn)
+        with cls.conn.cursor() as cur:
+            cur.execute('SELECT current_database()')
+            row=cur.fetchone(); assert row is not None
+            db=row[0]
+        if not db.startswith('hs_ingest_test_'):
+            cls.conn.close()
+            raise RuntimeError('Refusing integration writes outside hs_ingest_test_*')
+        cls.conn.rollback()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.conn.close()
+
+    def setUp(self):
+        self.user,self.store,self.product,self.presentation=[str(uuid.uuid4()) for _ in range(4)]
+        with self.conn:
+            with self.conn.cursor() as cur:
+                cur.execute('INSERT INTO users(id,name,email) VALUES(%s,%s,%s)',
+                            (self.user,'Review test',self.user+'@example.invalid'))
+                cur.execute('INSERT INTO stores(id,name,cnpj) VALUES(%s,%s,%s)',
+                            (self.store,'REVIEW STORE','00000000000001'))
+                cur.execute('INSERT INTO products(id,name,base_unit) VALUES(%s,%s,%s)',
+                            (self.product,'REVIEW PRODUCT','UN'))
+                cur.execute('INSERT INTO presentations(id,product_id,factor_base,sale_unit_recognized) VALUES(%s,%s,%s,%s)',
+                            (self.presentation,self.product,Decimal('1'),'UN'))
+
+    def tearDown(self):
+        self.conn.rollback()
+        with self.conn:
+            with self.conn.cursor() as cur:
+                cur.execute('DELETE FROM users WHERE id=%s',(self.user,))
+                cur.execute('DELETE FROM stores WHERE id=%s',(self.store,))
+                cur.execute('DELETE FROM products WHERE id=%s',(self.product,))
+
+    def pending_line(self):
+        payload={'header':{'store_cnpj':'00000000000001','total_gross':'10','amount_paid':'10'},
+                 'items':[{'description_raw':'REVIEW ITEM','sale_unit':'UN','quantity':'1',
+                           'unit_price':'10','line_total':'10'}]}
+        note=ingest.parse_note(payload)
+        with self.conn:
+            rid=ingest.insert_staging_receipt(self.conn,note,self.user,'IMPORT')
+            ingest.insert_staging_lines(self.conn,rid,note['items'])
+        with self.conn.cursor() as cur:
+            cur.execute('SELECT id FROM staging_lines WHERE receipt_id=%s',(str(rid),))
+            row=cur.fetchone(); assert row is not None
+            return str(row[0])
+
+    def test_confirmation_instruction_is_accepted_by_the_schema(self):
+        line_id=self.pending_line()
+        sql=ingest.confirm_line_sql(line_id,self.product,self.presentation)
+        with self.conn:
+            with self.conn.cursor() as cur:
+                cur.execute(sql)
+                cur.execute('SELECT review_state,reviewed,product_id,presentation_id FROM staging_lines WHERE id=%s',(line_id,))
+                row=cur.fetchone(); assert row is not None
+        self.assertEqual((row[0],row[1]),('CONFIRMED',True))
+        self.assertEqual((str(row[2]),str(row[3])),(self.product,self.presentation))
+
+    def test_no_match_instruction_is_accepted_by_the_schema(self):
+        line_id=self.pending_line()
+        sql=ingest.no_match_line_sql(line_id,'operador decidiu que nenhum candidato serve')
+        with self.conn:
+            with self.conn.cursor() as cur:
+                cur.execute(sql)
+                cur.execute('SELECT review_state,reviewed,product_id,presentation_id,match_note FROM staging_lines WHERE id=%s',(line_id,))
+                row=cur.fetchone(); assert row is not None
+        self.assertEqual((row[0],row[1]),('NO_MATCH',True))
+        self.assertIsNone(row[2])
+        self.assertIsNone(row[3])
+        self.assertEqual(json.loads(row[4])['reason'],'human_no_match')
+
+
+class ConcurrentStoreCreationTests(unittest.TestCase):
+    """Duas importações simultâneas da mesma loja nova não podem abortar uma delas."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dsn=os.environ.get('HS_INGEST_TEST_DSN')
+        if not cls.dsn:
+            raise unittest.SkipTest('Integration requires disposable HS_INGEST_TEST_DSN')
+        cls.conn=psycopg2.connect(cls.dsn)
+        with cls.conn.cursor() as cur:
+            cur.execute('SELECT current_database()')
+            row=cur.fetchone(); assert row is not None
+            db=row[0]
+        if not db.startswith('hs_ingest_test_'):
+            cls.conn.close()
+            raise RuntimeError('Refusing integration writes outside hs_ingest_test_*')
+        cls.conn.rollback()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.conn.close()
+
+    def esperar_espera_de_lock(self,conn,thread,limite=8.0):
+        """Espera a outra conexão ficar bloqueada no índice; não usa sleep fixo."""
+        import time
+        pid=conn.get_backend_pid()
+        fim=time.time()+limite
+        while time.time()<fim:
+            with self.conn.cursor() as cur:
+                cur.execute("SELECT wait_event_type FROM pg_stat_activity WHERE pid=%s",(pid,))
+                linha=cur.fetchone()
+            if linha is not None and linha[0]=='Lock':
+                return True
+            if not thread.is_alive():
+                return False
+            time.sleep(0.05)
+        return False
+
+    def test_two_connections_creating_the_same_store_do_not_abort_each_other(self):
+        import threading
+        cnpj='00000000000099'
+        primeira_conn=psycopg2.connect(self.dsn)
+        concorrente=psycopg2.connect(self.dsn)
+        resultado={}
+        try:
+            with primeira_conn:
+                with primeira_conn.cursor() as cur:
+                    cur.execute('INSERT INTO stores(name,cnpj) VALUES(%s,%s) RETURNING id',
+                                ('REVIEW STORE CONCORRENTE',cnpj))
+                    linha=cur.fetchone(); assert linha is not None
+                    primeira=linha[0]
+                def resolver():
+                    try:
+                        resultado['id']=ingest.resolve_or_create_store(concorrente,cnpj,'REVIEW STORE CONCORRENTE')
+                    except Exception as exc:
+                        resultado['erro']=exc
+                thread=threading.Thread(target=resolver)
+                thread.start()
+                bloqueou=self.esperar_espera_de_lock(concorrente,thread)
+                assert bloqueou, 'a segunda conexão não chegou a esperar pelo índice'
+            thread.join(timeout=15)
+            self.assertNotIn('erro',resultado,
+                             'a importação concorrente abortou: %r' % resultado.get('erro'))
+            self.assertEqual(str(resultado.get('id')),str(primeira))
+            with self.conn.cursor() as cur:
+                cur.execute('SELECT count(*) FROM stores WHERE cnpj=%s',(cnpj,))
+                self.assertEqual(cur.fetchone()[0],1)
+        finally:
+            primeira_conn.close()
+            concorrente.close()
+            with self.conn:
+                with self.conn.cursor() as cur:
+                    cur.execute('DELETE FROM stores WHERE cnpj=%s',(cnpj,))
+
+
 if __name__=='__main__':
     unittest.main()
