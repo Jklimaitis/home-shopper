@@ -378,6 +378,24 @@ def no_match_line_sql(line_id: str, reason: str) -> str:
     )
 
 
+def unlink_line_sql(line_id: str) -> str:
+    """UPDATE que limpa o vínculo — o passo para desfazer uma confirmação.
+
+    A linha confirmada que perde o vínculo é rebaixada a `PENDING` pelo trigger
+    `demote_unlinked_confirmed_line` (db/008 §6), então este comando devolve a linha
+    para a fila e o passo de recusa volta a valer. Ele existe como função pelo mesmo
+    motivo do ING-09: instrução que o operador teria de escrever à mão é instrução
+    que quebra em silêncio.
+    """
+    return (
+        "UPDATE staging_lines\n"
+        "SET product_id = NULL,\n"
+        "    presentation_id = NULL\n"
+        f"WHERE id = {_sql_literal(line_id)}\n"
+        "RETURNING id, review_state, reviewed;"
+    )
+
+
 def print_review_instructions(receipt_id: uuid.UUID) -> None:
     """Imprime consultas e exemplos executáveis de revisão via psql.
 
@@ -410,9 +428,12 @@ WHERE receipt_id = '{receipt_id}' AND match_source = 'NONE';
 {no_match_line_sql(PLACEHOLDER_LINE, PLACEHOLDER_REASON)}
 -- Saída esperada: a linha devolvida com review_state = NO_MATCH.
 -- UPDATE 0 tem duas causas: (a) o id não confere e nada foi alterado; (b) a linha
--- já está CONFIRMED, estado que a recusa não decide. No caso (b), desfaça antes a
--- confirmação limpando o vínculo (product_id e presentation_id para NULL): a linha
--- volta para PENDING e este comando passa a valer.
+-- já está CONFIRMED, estado que a recusa não decide. No caso (b), rode o passo 5
+-- (desfazer a confirmação) e volte a este comando.
+
+-- 5. Desfazer uma confirmação (a linha volta para PENDING e pode ser recusada):
+{unlink_line_sql(PLACEHOLDER_LINE)}
+-- O rebaixamento para PENDING é do trigger do db/008, não deste comando.
 """)
 
 

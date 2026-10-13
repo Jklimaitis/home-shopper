@@ -401,6 +401,18 @@ class ReviewInstructionTextTests(unittest.TestCase):
         self.assertIn('UPDATE 0 tem duas causas',texto)
         self.assertIn('já está CONFIRMED',texto)
 
+    def test_printed_text_shows_the_unlink_command(self):
+        # O passo de desfazer a confirmação tem de ser COMANDO COPIÁVEL, não prosa:
+        # descrever em texto obriga o operador a escrever SQL à mão, que é
+        # exatamente o defeito que o ING-09 fechou.
+        buf=io.StringIO()
+        with patch('sys.stdout',buf):
+            ingest.print_review_instructions(uuid.uuid4())
+        texto=buf.getvalue()
+        self.assertIn("UPDATE staging_lines",texto)
+        self.assertIn("SET product_id = NULL",texto)
+        self.assertIn("presentation_id = NULL",texto)
+
 
 class ReviewInstructionIntegrationTests(unittest.TestCase):
     """Executa os exemplos impressos contra o schema de verdade."""
@@ -529,13 +541,14 @@ class ReviewInstructionIntegrationTests(unittest.TestCase):
     def test_documented_recovery_path_unconfirms_then_refuses(self):
         # O texto impresso manda: para recusar uma linha confirmada, limpe antes o
         # vínculo (ela volta para PENDING) e então recuse. Este teste percorre
-        # exatamente esse caminho — instrução ao operador sem rede é instrução que
-        # quebra em silêncio.
+        # exatamente esse caminho — usando os DOIS comandos impressos, não SQL
+        # escrito à mão: instrução ao operador sem rede é instrução que quebra em
+        # silêncio.
         line_id=self.pending_line()
         with self.conn:
             with self.conn.cursor() as cur:
                 cur.execute(ingest.confirm_line_sql(line_id,self.product,self.presentation))
-                cur.execute('UPDATE staging_lines SET product_id = NULL, presentation_id = NULL WHERE id = %s',(line_id,))
+                cur.execute(ingest.unlink_line_sql(line_id))
                 cur.execute('SELECT review_state,reviewed FROM staging_lines WHERE id=%s',(line_id,))
                 meio=cur.fetchone()
         self.assertEqual(meio,('PENDING',False))
@@ -547,6 +560,22 @@ class ReviewInstructionIntegrationTests(unittest.TestCase):
         self.assertEqual((fim[0],fim[1]),('NO_MATCH',True))
         self.assertIsNone(fim[2])
         self.assertIsNone(fim[3])
+
+    def test_unlink_instruction_returns_the_line_to_pending(self):
+        # O comando impresso faz o que o texto promete: tira a confirmação e devolve
+        # a linha para a fila (o rebaixamento é do trigger do db/008, não do comando).
+        line_id=self.pending_line()
+        with self.conn:
+            with self.conn.cursor() as cur:
+                cur.execute(ingest.confirm_line_sql(line_id,self.product,self.presentation))
+        with self.conn:
+            with self.conn.cursor() as cur:
+                cur.execute(ingest.unlink_line_sql(line_id))
+                cur.execute('SELECT review_state,reviewed,product_id,presentation_id FROM staging_lines WHERE id=%s',(line_id,))
+                row=cur.fetchone(); assert row is not None
+        self.assertEqual((row[0],row[1]),('PENDING',False))
+        self.assertIsNone(row[2])
+        self.assertIsNone(row[3])
 
 
 class ConcurrentStoreCreationTests(unittest.TestCase):
